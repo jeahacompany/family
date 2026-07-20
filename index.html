@@ -240,8 +240,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v2.2.0';
+const VERSION = 'v2.3.0';
 const CHANGELOG = [
+  ['v2.3.0', '2026-07-20', '월별 카드값 개선 — ◀▶ 월 이동으로 과거 달 입력, 일시불/할부 나눠서 기록, 가계부 연동 유지'],
   ['v2.2.0', '2026-07-20', '카드값이 가계부 지출에 자동 반영 — 적은 달 결제일에 [카드] 내역 생성, 할부 등록분은 자동 차감(이중계산 방지)'],
   ['v2.1.0', '2026-07-20', '카드탭에 월별 카드값 — 매달 청구액 적으면 카드별·전체 전달 대비 증감(▲▼)과 6개월 흐름 그래프'],
   ['v2.0.2', '2026-07-20', '납입 총액을 안 적어도 회차 × 월납액으로 누적액 자동 추정'],
@@ -273,7 +274,7 @@ const INC_CATS = ['급여','사업소득','용돈','이자·배당','기타'];
 
 /* ---------- 상태 ---------- */
 let TOKEN = localStorage.getItem('fam_token') || '';
-let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], BILLS=[], LOANS=[], THIS_YM='';
+let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], BILLS=[], LOANS=[], THIS_YM='', BILL_YM='';
 let LEDGER={};          // { 'YYYY-MM': [entries] }
 let curTab='ledger', curYM='';
 
@@ -342,7 +343,7 @@ function applyBoot(r){
   ME=r.me; MEMBERS=r.members; ASSETS=r.assets; TOTALS=r.totals; SNAPSHOTS=r.snapshots; RECURRING=r.recurring||[]; MONTHLY=r.monthly||[];
   if(r.cardData){ CARDS=r.cardData.cards||[]; INSTS=r.cardData.installments||[]; BILLS=r.cardData.bills||[]; }
   LOANS=r.loans||[];
-  THIS_YM=r.thisMonth; curYM = curYM || r.thisMonth; LEDGER[r.thisMonth]=r.ledger;
+  THIS_YM=r.thisMonth; curYM = curYM || r.thisMonth; BILL_YM = BILL_YM || r.thisMonth; LEDGER[r.thisMonth]=r.ledger;
   $('whoami').textContent = ' · '+ME.displayName;
   $('verTxt').textContent = VERSION;
   $('loginView').style.display='none'; $('appView').style.display='block';
@@ -1126,36 +1127,40 @@ function renderCards(){
     </div>`;
   }).join('');
 
-  // ---------- 월별 카드값 (청구액) — 전달 대비 증감 ----------
-  const billOf = (cid, ym) => { const b = BILLS.find(x=>x.cardId===cid && x.ym===ym); return b ? Number(b.amount) : null; };
-  const prevYm = ymAdd(THIS_YM, -1);
+  // ---------- 월별 카드값 (청구액) — ◀▶로 월 이동, 일시불/할부 분리 ----------
+  const billRec = (cid, ym) => BILLS.find(x=>x.cardId===cid && x.ym===ym) || null;
+  const billOf = (cid, ym) => { const b = billRec(cid, ym); return b ? Number(b.amount) : null; };
+  const prevYm = ymAdd(BILL_YM, -1);
   const activeCards = CARDS.filter(c=>c.active);
   let thisSum=0, lastSum=0, anyBill=false;
   const billRows = activeCards.map(c=>{
-    const cur = billOf(c.id, THIS_YM), prev = billOf(c.id, prevYm);
+    const rec = billRec(c.id, BILL_YM);
+    const cur = rec ? Number(rec.amount) : null, prev = billOf(c.id, prevYm);
     if(cur!=null){ thisSum+=cur; anyBill=true; }
     if(prev!=null) lastSum+=prev;
     let diffTxt='';
     if(cur!=null && prev!=null){
       const d = cur-prev;
-      diffTxt = d===0 ? '<span class="muted">지난달과 같음</span>'
-        : `<b style="color:${d>0?'var(--red)':'var(--green)'}">${d>0?'▲':'▼'} ${fmtKor(Math.abs(d))}</b> <span class="muted">지난달 ${fmtKor(prev)}</span>`;
-    }else if(prev!=null){ diffTxt = `<span class="muted">지난달 ${fmtKor(prev)}</span>`; }
+      diffTxt = d===0 ? '<span class="muted">전달과 같음</span>'
+        : `<b style="color:${d>0?'var(--red)':'var(--green)'}">${d>0?'▲':'▼'} ${fmtKor(Math.abs(d))}</b> <span class="muted">전달 ${fmtKor(prev)}</span>`;
+    }else if(prev!=null){ diffTxt = `<span class="muted">전달 ${fmtKor(prev)}</span>`; }
+    const splitTxt = rec && (Number(rec.lumpPart)>0 || Number(rec.instPart)>0)
+      ? `일시불 ${fmtKor(rec.lumpPart)} · 할부 ${fmtKor(rec.instPart)}` : '';
     return `<div class="rec-item" onclick='openBillForm(${JSON.stringify(c.id)})'>
-      <span class="nm">${esc(c.name)}<div class="rec-sub">${diffTxt||'<span class="muted">눌러서 이번 달 카드값 입력</span>'}</div></span>
+      <span class="nm">${esc(c.name)}<div class="rec-sub">${splitTxt?splitTxt+(diffTxt?' · ':''):''}${diffTxt||(splitTxt?'':'<span class="muted">눌러서 이 달 카드값 입력</span>')}</div></span>
       <span class="amt">${cur!=null?fmt(cur)+'원':'<span class="muted">미입력</span>'}</span>
     </div>`;
   }).join('');
   let billTotalTxt = '';
   if(anyBill){
     const d = thisSum - lastSum;
-    billTotalTxt = `<div style="margin-top:10px; font-size:.92rem">이번 달 카드값 합계 <b>${fmtKor(thisSum)}</b>`
-      + (lastSum>0 ? ` · 지난달 ${fmtKor(lastSum)} <b style="color:${d>0?'var(--red)':'var(--green)'}">(${d>0?'▲ 더 씀':'▼ 줄임'} ${fmtKor(Math.abs(d))})</b>` : '')
+    billTotalTxt = `<div style="margin-top:10px; font-size:.92rem">${Number(BILL_YM.slice(5))}월 카드값 합계 <b>${fmtKor(thisSum)}</b>`
+      + (lastSum>0 ? ` · 전달 ${fmtKor(lastSum)} <b style="color:${d>0?'var(--red)':'var(--green)'}">(${d>0?'▲ 더 씀':'▼ 줄임'} ${fmtKor(Math.abs(d))})</b>` : '')
       + `</div>`;
   }
-  // 최근 6개월 카드값 흐름
+  // 최근 6개월 카드값 흐름 (보고 있는 달 기준)
   let billTrend='';
-  const bMonths=[]; for(let i=5;i>=0;i--) bMonths.push(ymAdd(THIS_YM,-i));
+  const bMonths=[]; for(let i=5;i>=0;i--) bMonths.push(ymAdd(BILL_YM,-i));
   const bVals = bMonths.map(ym=>({ ym, v: activeCards.reduce((s,c)=>s+(billOf(c.id,ym)||0),0) }));
   if(bVals.some(v=>v.v>0)){
     const bMax = Math.max(...bVals.map(v=>v.v), 1);
@@ -1163,18 +1168,24 @@ function renderCards(){
       <div style="flex:1; text-align:center">
         <div style="height:52px; display:flex; align-items:flex-end; justify-content:center">
           <div style="width:70%; border-radius:4px 4px 0 0; height:${v.v?Math.max(6,Math.round(v.v/bMax*52)):0}px;
-            background:${v.ym===THIS_YM?'var(--accent)':'#c9d4ea'}"></div>
+            background:${v.ym===BILL_YM?'var(--accent)':'#c9d4ea'}"></div>
         </div>
         <div style="font-size:.62rem; color:var(--sub); font-weight:700; margin-top:3px">${Number(v.ym.slice(5))}월</div>
         <div style="font-size:.6rem; color:var(--sub)">${v.v?fmtShort(v.v):''}</div>
       </div>`).join('')}</div>`;
   }
   const billsHtml = `<div class="card">
-    <div class="rec-head"><h3>📊 월별 카드값 (매달 청구액 입력)</h3></div>
+    <div class="rec-head"><h3>📊 월별 카드값</h3>
+      <span class="row" style="gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="moveBillMonth(-1)">◀</button>
+        <b style="color:var(--navy)">${BILL_YM.replace('-','.')}</b>
+        <button class="btn btn-ghost btn-sm" onclick="moveBillMonth(1)">▶</button>
+      </span>
+    </div>
     ${billRows}
     ${billTotalTxt}
     ${billTrend}
-    <div class="muted" style="margin-top:8px">카드사 앱의 청구금액을 매달 적으세요 — <b>그 달 가계부 지출에도 자동 반영</b>되고, 전달 대비 증감이 비교됩니다</div>
+    <div class="muted" style="margin-top:8px">◀▶로 달을 옮겨 과거 것도 채우세요. 적으면 <b>그 달 가계부 지출에 자동 반영</b>됩니다 (일시불+할부 합계)</div>
   </div>`;
 
   el.innerHTML = `
@@ -1194,28 +1205,48 @@ async function refreshCards(){
   LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM);  // 할부 자동기록 반영
   renderCards(); renderLedger();
 }
-/* 월별 카드값 입력 */
+/* 월별 카드값 — 월 이동 */
+function moveBillMonth(n){ BILL_YM = ymAdd(BILL_YM, n); renderCards(); }
+/* 월별 카드값 입력 (일시불/할부 분리) */
 function openBillForm(cardId){
   const c = CARDS.find(x=>x.id===cardId);
-  const cur = BILLS.find(x=>x.cardId===cardId && x.ym===THIS_YM);
+  const cur = BILLS.find(x=>x.cardId===cardId && x.ym===BILL_YM);
+  const lumpV = cur ? Number(cur.lumpPart||0) : 0;
+  const instV = cur ? Number(cur.instPart||0) : 0;
+  // 예전 방식(합계만 저장)이면 일시불 칸에 채워서 보여줌
+  const lumpInit = cur ? (lumpV||instV ? lumpV : Number(cur.amount)) : 0;
   openModal(`
     <h2>📊 ${esc(c.name)} 카드값 입력</h2>
-    <div class="f-row"><label>어느 달 청구액인가</label><input id="blYm" type="month" value="${THIS_YM}"></div>
-    <div class="f-row"><label>청구 금액</label><input id="blAmt" inputmode="numeric" placeholder="0" value="${cur?fmt(cur.amount):''}"><div class="kor-hint" id="blAmtHint">${cur?'= '+fmtKor(cur.amount):''}</div></div>
-    <div class="muted" style="margin-bottom:6px">카드사 앱에 나온 그 달 청구금액을 그대로 적으세요. 그 달 결제일 지출로 가계부에 자동 반영됩니다. (0원 저장 = 지우기, 할부 등록분은 자동으로 빼고 계산)</div>
+    <div class="f-row"><label>어느 달 청구액인가</label><input id="blYm" type="month" value="${BILL_YM}"></div>
+    <div class="f-row"><label>일시불 금액</label><input id="blLump" inputmode="numeric" placeholder="0" value="${lumpInit?fmt(lumpInit):''}"><div class="kor-hint" id="blLumpHint"></div></div>
+    <div class="f-row"><label>할부 금액</label><input id="blInst" inputmode="numeric" placeholder="0" value="${instV?fmt(instV):''}"><div class="kor-hint" id="blInstHint"></div></div>
+    <div class="kor-hint" id="blSumHint" style="margin-bottom:10px"></div>
+    <div class="muted" style="margin-bottom:6px">카드사 앱의 청구내역에서 일시불/할부를 나눠 적으세요. 합계가 그 달 결제일 지출로 가계부에 자동 반영됩니다. (둘 다 0원 저장 = 지우기)</div>
     <div class="m-actions"><button class="btn btn-primary" onclick='saveBill(${JSON.stringify(cardId)})'>저장</button></div>`);
-  moneyInput($('blAmt'), $('blAmtHint'));
+  moneyInput($('blLump'), $('blLumpHint'));
+  moneyInput($('blInst'), $('blInstHint'));
+  const updSum = ()=>{
+    const t = moneyVal($('blLump')) + moneyVal($('blInst'));
+    $('blSumHint').textContent = t ? '합계 = '+fmtKor(t) : '';
+  };
+  ['blLump','blInst'].forEach(x=>$(x).addEventListener('input', updSum));
+  updSum();
   // 월 바꾸면 그 달 저장값 불러오기
   $('blYm').addEventListener('change', ()=>{
     const b = BILLS.find(x=>x.cardId===cardId && x.ym===$('blYm').value);
-    $('blAmt').value = b ? fmt(b.amount) : '';
-    $('blAmtHint').textContent = b ? '= '+fmtKor(b.amount) : '';
+    const l = b ? (Number(b.lumpPart||0)||Number(b.instPart||0) ? Number(b.lumpPart||0) : Number(b.amount)) : 0;
+    const i = b ? Number(b.instPart||0) : 0;
+    $('blLump').value = l ? fmt(l) : '';
+    $('blInst').value = i ? fmt(i) : '';
+    updSum();
   });
-  setTimeout(()=>$('blAmt').focus(), 50);
+  setTimeout(()=>$('blLump').focus(), 50);
 }
 async function saveBill(cardId){
   try{
-    await api('cardBillSave', TOKEN, { cardId: cardId, ym: $('blYm').value, amount: moneyVal($('blAmt')) });
+    await api('cardBillSave', TOKEN, { cardId: cardId, ym: $('blYm').value,
+      lumpPart: moneyVal($('blLump')), instPart: moneyVal($('blInst')),
+      amount: moneyVal($('blLump')) + moneyVal($('blInst')) });
     closeModal(); toast('저장했습니다'); await refreshCards();
   }catch(e){ alert(e.message); reportError('saveBill', e.message); }
 }
