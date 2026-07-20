@@ -238,8 +238,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.9.2';
+const VERSION = 'v1.9.3';
 const CHANGELOG = [
+  ['v1.9.3', '2026-07-20', '카드마다 용도 메모 — "생활비 전용, 주유·차량" 식으로 적어두면 카드 목록에 노란 라벨로 표시'],
   ['v1.9.2', '2026-07-20', '보증금을 기존 고정지출(렌트·월세)에 연결 — 고르면 이름·명의·돌려받는 시기 자동 입력, 양쪽에 서로 표시'],
   ['v1.9.1', '2026-07-20', '대여금 상환도 "매달 고정지출" 목록·총액에 포함 (기간 끝날 때까지 고정이니까)'],
   ['v1.9.0', '2026-07-20', '보증금 탭 신설 — 렌트·집 보증금 등록, 묶여있는 돈 합계와 돌려받는 시기 관리. 재산으로 자동 분류'],
@@ -1065,6 +1066,7 @@ function renderCards(){
         <h3>💳 ${esc(c.name)} <span class="muted" style="font-weight:400">· 결제일 ${c.payDom}일${c.limitAmount?' · 한도 '+fmtKor(c.limitAmount):''}</span></h3>
         <button class="btn btn-ghost btn-sm" onclick='openCardForm(${JSON.stringify(c.id)})'>수정</button>
       </div>
+      ${c.memo?`<div style="margin:-4px 0 8px"><span class="cat" style="background:#fff7e0;color:#a16207">용도</span> <span style="font-size:.88rem">${esc(c.memo)}</span></div>`:''}
       ${rows || '<div class="muted" style="padding:4px 0">진행 중인 할부 없음</div>'}
       ${doneCnt?`<div class="muted" style="margin-top:6px">완납된 할부 ${doneCnt}건</div>`:''}
       <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center">
@@ -1097,6 +1099,7 @@ function openCardForm(id){
     <div class="f-row"><label>카드 이름</label><input id="cdName" placeholder="예: 현대카드, 국민 체크" value="${it?esc(it.name):''}"></div>
     <div class="f-row"><label>결제일 (매달 며칠)</label><input id="cdDom" type="number" min="1" max="31" value="${it?it.payDom:25}"></div>
     <div class="f-row"><label>한도 (선택)</label><input id="cdLimit" inputmode="numeric" placeholder="0" value="${it&&it.limitAmount?fmt(it.limitAmount):''}"><div class="kor-hint" id="cdLimitHint">${it&&it.limitAmount?'= '+fmtKor(it.limitAmount):''}</div></div>
+    <div class="f-row"><label>용도 (이 카드 뭐에 쓰는지)</label><input id="cdMemo" placeholder="예: 생활비 전용, 주유·차량, 온라인 구독" value="${it?esc(it.memo):''}"></div>
     <div class="m-actions">
       ${it?'<button class="btn btn-danger" onclick="deleteCard(\''+it.id+'\')">삭제</button>':''}
       <button class="btn btn-primary" onclick="saveCard('${it?it.id:''}')">저장</button>
@@ -1107,7 +1110,8 @@ function openCardForm(id){
 async function saveCard(id){
   try{
     await api('cardSave', TOKEN, { id:id||'', name:$('cdName').value.trim(),
-      payDom:Number($('cdDom').value||25), limitAmount:moneyVal($('cdLimit')) });
+      payDom:Number($('cdDom').value||25), limitAmount:moneyVal($('cdLimit')),
+      memo:$('cdMemo').value.trim() });
     closeModal(); toast('저장했습니다'); await refreshCards();
   }catch(e){ alert(e.message); reportError('saveCard', e.message); }
 }
