@@ -240,8 +240,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v2.0.2';
+const VERSION = 'v2.1.0';
 const CHANGELOG = [
+  ['v2.1.0', '2026-07-20', '카드탭에 월별 카드값 — 매달 청구액 적으면 카드별·전체 전달 대비 증감(▲▼)과 6개월 흐름 그래프'],
   ['v2.0.2', '2026-07-20', '납입 총액을 안 적어도 회차 × 월납액으로 누적액 자동 추정'],
   ['v2.0.1', '2026-07-20', '납입 회차만 적으면 시작 월·남은 회차·끝나는 달 자동 역산 — 달력 안 봐도 됨. 회당 평균액 검산 표시'],
   ['v2.0.0', '2026-07-20', '보험 탭 신설 — 실제 납입 회차·총액(기준값 보정)과 비과세 해지일 관리. 누적 납입액이 자산으로 보임'],
@@ -271,7 +272,7 @@ const INC_CATS = ['급여','사업소득','용돈','이자·배당','기타'];
 
 /* ---------- 상태 ---------- */
 let TOKEN = localStorage.getItem('fam_token') || '';
-let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], LOANS=[], THIS_YM='';
+let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], BILLS=[], LOANS=[], THIS_YM='';
 let LEDGER={};          // { 'YYYY-MM': [entries] }
 let curTab='ledger', curYM='';
 
@@ -338,7 +339,7 @@ function csvDownload(filename, rows){
 function showLogin(){ $('appView').style.display='none'; $('loginView').style.display='flex'; }
 function applyBoot(r){
   ME=r.me; MEMBERS=r.members; ASSETS=r.assets; TOTALS=r.totals; SNAPSHOTS=r.snapshots; RECURRING=r.recurring||[]; MONTHLY=r.monthly||[];
-  if(r.cardData){ CARDS=r.cardData.cards||[]; INSTS=r.cardData.installments||[]; }
+  if(r.cardData){ CARDS=r.cardData.cards||[]; INSTS=r.cardData.installments||[]; BILLS=r.cardData.bills||[]; }
   LOANS=r.loans||[];
   THIS_YM=r.thisMonth; curYM = curYM || r.thisMonth; LEDGER[r.thisMonth]=r.ledger;
   $('whoami').textContent = ' · '+ME.displayName;
@@ -1122,8 +1123,60 @@ function renderCards(){
     </div>`;
   }).join('');
 
+  // ---------- 월별 카드값 (청구액) — 전달 대비 증감 ----------
+  const billOf = (cid, ym) => { const b = BILLS.find(x=>x.cardId===cid && x.ym===ym); return b ? Number(b.amount) : null; };
+  const prevYm = ymAdd(THIS_YM, -1);
+  const activeCards = CARDS.filter(c=>c.active);
+  let thisSum=0, lastSum=0, anyBill=false;
+  const billRows = activeCards.map(c=>{
+    const cur = billOf(c.id, THIS_YM), prev = billOf(c.id, prevYm);
+    if(cur!=null){ thisSum+=cur; anyBill=true; }
+    if(prev!=null) lastSum+=prev;
+    let diffTxt='';
+    if(cur!=null && prev!=null){
+      const d = cur-prev;
+      diffTxt = d===0 ? '<span class="muted">지난달과 같음</span>'
+        : `<b style="color:${d>0?'var(--red)':'var(--green)'}">${d>0?'▲':'▼'} ${fmtKor(Math.abs(d))}</b> <span class="muted">지난달 ${fmtKor(prev)}</span>`;
+    }else if(prev!=null){ diffTxt = `<span class="muted">지난달 ${fmtKor(prev)}</span>`; }
+    return `<div class="rec-item" onclick='openBillForm(${JSON.stringify(c.id)})'>
+      <span class="nm">${esc(c.name)}<div class="rec-sub">${diffTxt||'<span class="muted">눌러서 이번 달 카드값 입력</span>'}</div></span>
+      <span class="amt">${cur!=null?fmt(cur)+'원':'<span class="muted">미입력</span>'}</span>
+    </div>`;
+  }).join('');
+  let billTotalTxt = '';
+  if(anyBill){
+    const d = thisSum - lastSum;
+    billTotalTxt = `<div style="margin-top:10px; font-size:.92rem">이번 달 카드값 합계 <b>${fmtKor(thisSum)}</b>`
+      + (lastSum>0 ? ` · 지난달 ${fmtKor(lastSum)} <b style="color:${d>0?'var(--red)':'var(--green)'}">(${d>0?'▲ 더 씀':'▼ 줄임'} ${fmtKor(Math.abs(d))})</b>` : '')
+      + `</div>`;
+  }
+  // 최근 6개월 카드값 흐름
+  let billTrend='';
+  const bMonths=[]; for(let i=5;i>=0;i--) bMonths.push(ymAdd(THIS_YM,-i));
+  const bVals = bMonths.map(ym=>({ ym, v: activeCards.reduce((s,c)=>s+(billOf(c.id,ym)||0),0) }));
+  if(bVals.some(v=>v.v>0)){
+    const bMax = Math.max(...bVals.map(v=>v.v), 1);
+    billTrend = `<div style="display:flex; gap:4px; margin-top:12px">${bVals.map(v=>`
+      <div style="flex:1; text-align:center">
+        <div style="height:52px; display:flex; align-items:flex-end; justify-content:center">
+          <div style="width:70%; border-radius:4px 4px 0 0; height:${v.v?Math.max(6,Math.round(v.v/bMax*52)):0}px;
+            background:${v.ym===THIS_YM?'var(--accent)':'#c9d4ea'}"></div>
+        </div>
+        <div style="font-size:.62rem; color:var(--sub); font-weight:700; margin-top:3px">${Number(v.ym.slice(5))}월</div>
+        <div style="font-size:.6rem; color:var(--sub)">${v.v?fmtShort(v.v):''}</div>
+      </div>`).join('')}</div>`;
+  }
+  const billsHtml = `<div class="card">
+    <div class="rec-head"><h3>📊 월별 카드값 (매달 청구액 입력)</h3></div>
+    ${billRows}
+    ${billTotalTxt}
+    ${billTrend}
+    <div class="muted" style="margin-top:8px">카드사 앱의 청구금액을 매달 적으면 줄었는지 늘었는지 비교됩니다</div>
+  </div>`;
+
   el.innerHTML = `
     ${limitHtml}
+    ${billsHtml}
     <div class="networth" style="background:linear-gradient(135deg,#7c2d5a,#a94467)">${goalHtml}</div>
     ${projHtml}
     ${cardSections}
@@ -1134,9 +1187,34 @@ function renderCards(){
 }
 async function refreshCards(){
   const cd = await api('cardList', TOKEN);
-  CARDS=cd.cards||[]; INSTS=cd.installments||[];
+  CARDS=cd.cards||[]; INSTS=cd.installments||[]; BILLS=cd.bills||[];
   LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM);  // 할부 자동기록 반영
   renderCards(); renderLedger();
+}
+/* 월별 카드값 입력 */
+function openBillForm(cardId){
+  const c = CARDS.find(x=>x.id===cardId);
+  const cur = BILLS.find(x=>x.cardId===cardId && x.ym===THIS_YM);
+  openModal(`
+    <h2>📊 ${esc(c.name)} 카드값 입력</h2>
+    <div class="f-row"><label>어느 달 청구액인가</label><input id="blYm" type="month" value="${THIS_YM}"></div>
+    <div class="f-row"><label>청구 금액</label><input id="blAmt" inputmode="numeric" placeholder="0" value="${cur?fmt(cur.amount):''}"><div class="kor-hint" id="blAmtHint">${cur?'= '+fmtKor(cur.amount):''}</div></div>
+    <div class="muted" style="margin-bottom:6px">카드사 앱에 나온 그 달 청구금액을 그대로 적으세요. (0원 저장 = 지우기)</div>
+    <div class="m-actions"><button class="btn btn-primary" onclick='saveBill(${JSON.stringify(cardId)})'>저장</button></div>`);
+  moneyInput($('blAmt'), $('blAmtHint'));
+  // 월 바꾸면 그 달 저장값 불러오기
+  $('blYm').addEventListener('change', ()=>{
+    const b = BILLS.find(x=>x.cardId===cardId && x.ym===$('blYm').value);
+    $('blAmt').value = b ? fmt(b.amount) : '';
+    $('blAmtHint').textContent = b ? '= '+fmtKor(b.amount) : '';
+  });
+  setTimeout(()=>$('blAmt').focus(), 50);
+}
+async function saveBill(cardId){
+  try{
+    await api('cardBillSave', TOKEN, { cardId: cardId, ym: $('blYm').value, amount: moneyVal($('blAmt')) });
+    closeModal(); toast('저장했습니다'); await refreshCards();
+  }catch(e){ alert(e.message); reportError('saveBill', e.message); }
 }
 function openCardForm(id){
   const it = id ? CARDS.find(c=>c.id===id) : null;
