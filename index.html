@@ -234,8 +234,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.6.0';
+const VERSION = 'v1.6.1';
 const CHANGELOG = [
+  ['v1.6.1', '2026-07-20', '카드탭 맨 위에 총한도/할부 중/남은 한도 요약 + 한도 사용률 게이지 추가'],
   ['v1.6.0', '2026-07-20', '카드·할부 탭 신설 — 남은 할부 총액·언제 끝나는지·월별 감소 그래프, 결제일에 가계부 자동 기록. 가계부 입력에 단발/고정 선택 추가'],
   ['v1.5.1', '2026-07-20', '내역마다 고정지출 여부 표시 — 목록에 초록 "고정" 라벨, 수정 화면에 고정지출 안내·설정 바로가기'],
   ['v1.5.0', '2026-07-20', '고정지출 완전 자동 기록(체크 불필요), 지난달 대비 비교 + 월별 지출 흐름 그래프, 고정지출별 누적 납부 횟수·총액 표시'],
@@ -905,6 +906,25 @@ function renderCards(){
   const calcs = INSTS.map(i=>({ i, c: instCalc(i) }));
   const alive = calcs.filter(x=>!x.c.done);
   const totalRemain = alive.reduce((s,x)=>s+x.c.remainAmt, 0);
+  const totalLimit = CARDS.filter(c=>c.active).reduce((s,c)=>s+Number(c.limitAmount||0), 0);
+  const freeLimit = Math.max(totalLimit - totalRemain, 0);
+  const usePct = totalLimit ? Math.min(Math.round(totalRemain/totalLimit*100), 100) : 0;
+  const limitHtml = totalLimit ? `
+    <div class="led-sum" style="margin-top:14px">
+      <div><div class="l">총 한도</div><div class="v">${fmtKor(totalLimit)}</div></div>
+      <div><div class="l">할부 중</div><div class="v" style="color:var(--red)">${fmtKor(totalRemain)}</div></div>
+      <div><div class="l">남은 한도</div><div class="v" style="color:var(--green)">${fmtKor(freeLimit)}</div></div>
+    </div>
+    <div class="card" style="padding:12px 16px">
+      <div style="display:flex; justify-content:space-between; font-size:.85rem; margin-bottom:6px">
+        <span class="muted">한도 사용률</span><b style="color:${usePct>=70?'var(--red)':usePct>=40?'#e8871e':'var(--green)'}">${usePct}%</b>
+      </div>
+      <div class="bar" style="height:10px; background:#edf0f6; border-radius:6px; overflow:hidden">
+        <i style="display:block; height:100%; width:${usePct}%; border-radius:6px;
+          background:${usePct>=70?'var(--red)':usePct>=40?'#e8871e':'var(--green)'}"></i>
+      </div>
+    </div>` : `
+    <div class="muted" style="text-align:center; margin-top:12px">카드 수정에서 한도를 입력하면 총한도·남은 한도가 여기 표시됩니다</div>`;
   const thisPay = INSTS.reduce((s,i)=>s+instPayAt(i, THIS_YM), 0);
   const lastPay = INSTS.reduce((s,i)=>s+instPayAt(i, ymAdd(THIS_YM,-1)), 0);
   const maxEnd = alive.length ? alive.map(x=>x.c.endYm).sort().pop() : null;
@@ -975,6 +995,7 @@ function renderCards(){
   }).join('');
 
   el.innerHTML = `
+    ${limitHtml}
     <div class="networth" style="background:linear-gradient(135deg,#7c2d5a,#a94467)">${goalHtml}</div>
     ${projHtml}
     ${cardSections}
