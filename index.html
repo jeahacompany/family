@@ -240,8 +240,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v2.1.0';
+const VERSION = 'v2.2.0';
 const CHANGELOG = [
+  ['v2.2.0', '2026-07-20', '카드값이 가계부 지출에 자동 반영 — 적은 달 결제일에 [카드] 내역 생성, 할부 등록분은 자동 차감(이중계산 방지)'],
   ['v2.1.0', '2026-07-20', '카드탭에 월별 카드값 — 매달 청구액 적으면 카드별·전체 전달 대비 증감(▲▼)과 6개월 흐름 그래프'],
   ['v2.0.2', '2026-07-20', '납입 총액을 안 적어도 회차 × 월납액으로 누적액 자동 추정'],
   ['v2.0.1', '2026-07-20', '납입 회차만 적으면 시작 월·남은 회차·끝나는 달 자동 역산 — 달력 안 봐도 됨. 회당 평균액 검산 표시'],
@@ -477,6 +478,7 @@ function renderLedger(){
     const items = byDate[d].map(r=>`
       <div class="led-item" onclick='openLedgerForm(${JSON.stringify(r.id)})'>
         ${r.recurringId?'<span class="cat" style="background:#e7f6ec;color:#18a058">고정</span>':''}
+        ${r.billId?'<span class="cat" style="background:#fdf1e3;color:#a16207">카드</span>':''}
         <span class="cat">${esc(r.category)}</span>
         <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}</span>
         <span class="amt ${r.kind}">${r.kind==='income'?'+':'-'}${fmt(r.amount)}원</span>
@@ -550,6 +552,7 @@ function openDayModal(ds){
   const entryHtml = rows.map(r=>`
     <div class="led-item" onclick='openLedgerForm(${JSON.stringify(r.id)})'>
       ${r.recurringId?'<span class="cat" style="background:#e7f6ec;color:#18a058">고정</span>':''}
+      ${r.billId?'<span class="cat" style="background:#fdf1e3;color:#a16207">카드</span>':''}
       <span class="cat">${esc(r.category)}</span>
       <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}</span>
       <span class="amt ${r.kind}">${r.kind==='income'?'+':'-'}${fmt(r.amount)}원</span>
@@ -1171,7 +1174,7 @@ function renderCards(){
     ${billRows}
     ${billTotalTxt}
     ${billTrend}
-    <div class="muted" style="margin-top:8px">카드사 앱의 청구금액을 매달 적으면 줄었는지 늘었는지 비교됩니다</div>
+    <div class="muted" style="margin-top:8px">카드사 앱의 청구금액을 매달 적으세요 — <b>그 달 가계부 지출에도 자동 반영</b>되고, 전달 대비 증감이 비교됩니다</div>
   </div>`;
 
   el.innerHTML = `
@@ -1199,7 +1202,7 @@ function openBillForm(cardId){
     <h2>📊 ${esc(c.name)} 카드값 입력</h2>
     <div class="f-row"><label>어느 달 청구액인가</label><input id="blYm" type="month" value="${THIS_YM}"></div>
     <div class="f-row"><label>청구 금액</label><input id="blAmt" inputmode="numeric" placeholder="0" value="${cur?fmt(cur.amount):''}"><div class="kor-hint" id="blAmtHint">${cur?'= '+fmtKor(cur.amount):''}</div></div>
-    <div class="muted" style="margin-bottom:6px">카드사 앱에 나온 그 달 청구금액을 그대로 적으세요. (0원 저장 = 지우기)</div>
+    <div class="muted" style="margin-bottom:6px">카드사 앱에 나온 그 달 청구금액을 그대로 적으세요. 그 달 결제일 지출로 가계부에 자동 반영됩니다. (0원 저장 = 지우기, 할부 등록분은 자동으로 빼고 계산)</div>
     <div class="m-actions"><button class="btn btn-primary" onclick='saveBill(${JSON.stringify(cardId)})'>저장</button></div>`);
   moneyInput($('blAmt'), $('blAmtHint'));
   // 월 바꾸면 그 달 저장값 불러오기
