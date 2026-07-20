@@ -240,8 +240,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v2.0.1';
+const VERSION = 'v2.0.2';
 const CHANGELOG = [
+  ['v2.0.2', '2026-07-20', '납입 총액을 안 적어도 회차 × 월납액으로 누적액 자동 추정'],
   ['v2.0.1', '2026-07-20', '납입 회차만 적으면 시작 월·남은 회차·끝나는 달 자동 역산 — 달력 안 봐도 됨. 회당 평균액 검산 표시'],
   ['v2.0.0', '2026-07-20', '보험 탭 신설 — 실제 납입 회차·총액(기준값 보정)과 비과세 해지일 관리. 누적 납입액이 자산으로 보임'],
   ['v1.9.3', '2026-07-20', '카드마다 용도 메모 — "생활비 전용, 주유·차량" 식으로 적어두면 카드 목록에 노란 라벨로 표시'],
@@ -1415,8 +1416,11 @@ async function deleteDeposit(id){
 /* 실제 누적 납입 (기준값 + 그 이후 앱 자동기록) — 기준값 없으면 시작월 추정 */
 function effPaid(r){
   if(r.baseYm != null && r.baseYm !== ''){
-    return { cnt: Number(r.baseCount||0) + Number(r.paidCountAfterBase||0),
-             amt: Number(r.baseAmount||0) + Number(r.paidTotalAfterBase||0), real: true };
+    const cnt = Number(r.baseCount||0) + Number(r.paidCountAfterBase||0);
+    // 총액을 안 적었으면 회차 × 월납액으로 추정
+    const hasReal = Number(r.baseAmount||0) > 0;
+    const baseAmt = hasReal ? Number(r.baseAmount) : Number(r.baseCount||0) * Number(r.amount);
+    return { cnt, amt: baseAmt + Number(r.paidTotalAfterBase||0), real: hasReal };
   }
   const p = recurPeriod(r);
   if(p) return { cnt: p.cnt, amt: p.paidAmt, real: false };
