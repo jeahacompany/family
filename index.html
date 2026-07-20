@@ -202,6 +202,7 @@ footer button{color:#9aa3b5; text-decoration:underline}
     <div class="tabs">
       <button id="tabBtn-ledger" class="on" onclick="showTab('ledger')">지출·가계부</button>
       <button id="tabBtn-cards" onclick="showTab('cards')">카드·할부</button>
+      <button id="tabBtn-loans" onclick="showTab('loans')">대여금</button>
       <button id="tabBtn-home" style="display:none" onclick="showTab('home')">재산현황</button>
       <button id="tabBtn-assets" style="display:none" onclick="showTab('assets')">자산</button>
     </div>
@@ -211,6 +212,7 @@ footer button{color:#9aa3b5; text-decoration:underline}
 <div class="wrap">
   <div id="tab-ledger"></div>
   <div id="tab-cards" style="display:none"></div>
+  <div id="tab-loans" style="display:none"></div>
   <div id="tab-home" style="display:none"></div>
   <div id="tab-assets" style="display:none"></div>
   <footer>
@@ -234,8 +236,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.7.0';
+const VERSION = 'v1.8.0';
 const CHANGELOG = [
+  ['v1.8.0', '2026-07-20', '대여금 탭 신설 — 개인 간 빌린 돈/빌려준 돈, 매달 상환이 가계부에 자동 기록, 남은 금액·언제 끝나는지 자동 계산'],
   ['v1.7.0', '2026-07-20', '고정지출에 기간 개념 — 처음 납부 월·총 개월 수 입력하면 지금까지 몇 회/얼마 냈고 언제 끝나는지 자동 계산 (렌트·대출·적금용). 끝난 뒤엔 자동 기록도 멈춤'],
   ['v1.6.1', '2026-07-20', '카드탭 맨 위에 총한도/할부 중/남은 한도 요약 + 한도 사용률 게이지 추가'],
   ['v1.6.0', '2026-07-20', '카드·할부 탭 신설 — 남은 할부 총액·언제 끝나는지·월별 감소 그래프, 결제일에 가계부 자동 기록. 가계부 입력에 단발/고정 선택 추가'],
@@ -257,7 +260,7 @@ const INC_CATS = ['급여','사업소득','용돈','이자·배당','기타'];
 
 /* ---------- 상태 ---------- */
 let TOKEN = localStorage.getItem('fam_token') || '';
-let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], THIS_YM='';
+let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], LOANS=[], THIS_YM='';
 let LEDGER={};          // { 'YYYY-MM': [entries] }
 let curTab='ledger', curYM='';
 
@@ -325,6 +328,7 @@ function showLogin(){ $('appView').style.display='none'; $('loginView').style.di
 function applyBoot(r){
   ME=r.me; MEMBERS=r.members; ASSETS=r.assets; TOTALS=r.totals; SNAPSHOTS=r.snapshots; RECURRING=r.recurring||[]; MONTHLY=r.monthly||[];
   if(r.cardData){ CARDS=r.cardData.cards||[]; INSTS=r.cardData.installments||[]; }
+  LOANS=r.loans||[];
   THIS_YM=r.thisMonth; curYM = curYM || r.thisMonth; LEDGER[r.thisMonth]=r.ledger;
   $('whoami').textContent = ' · '+ME.displayName;
   $('verTxt').textContent = VERSION;
@@ -354,19 +358,20 @@ async function reload(){
 /* ---------- 탭 ---------- */
 function showTab(t){
   curTab=t;
-  ['home','ledger','assets','cards'].forEach(x=>{
+  ['home','ledger','assets','cards','loans'].forEach(x=>{
     $('tab-'+x).style.display = x===t?'block':'none';
     $('tabBtn-'+x).classList.toggle('on', x===t);
   });
-  $('fabBtn').style.display = (t==='ledger'||t==='assets'||t==='cards') ? 'block' : 'none';
+  $('fabBtn').style.display = (t==='ledger'||t==='assets'||t==='cards'||t==='loans') ? 'block' : 'none';
   window.scrollTo(0,0);
 }
 function fabClick(){
   if(curTab==='ledger') openLedgerForm();
   else if(curTab==='assets') openAssetForm();
   else if(curTab==='cards'){ CARDS.length ? openInstForm() : openCardForm(); }
+  else if(curTab==='loans') openLoanForm();
 }
-function renderAll(){ renderHome(); renderLedger(); renderAssets(); renderCards(); showTab(curTab); }
+function renderAll(){ renderHome(); renderLedger(); renderAssets(); renderCards(); renderLoans(); showTab(curTab); }
 
 /* ============================================================
    ① 재산현황
@@ -1122,6 +1127,122 @@ async function saveInst(id){
 async function deleteInst(id){
   if(!confirm('이 할부를 삭제할까요?\n(이미 기록된 납부 내역은 남습니다)')) return;
   try{ await api('instDelete', TOKEN, id); closeModal(); toast('삭제했습니다'); await refreshCards(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ============================================================
+   대여금 — 개인 간 빌린 돈/빌려준 돈 관리
+   (할부와 같은 계산 방식: 총액/개월수/첫 달 → 남은 금액·종료 시점)
+   ============================================================ */
+function renderLoans(){
+  const el = $('tab-loans'); if(!el) return;
+  if(!LOANS.length){
+    el.innerHTML = `<div class="empty" style="padding-top:60px">
+      개인적으로 빌린 돈 / 빌려준 돈을 등록하세요.<br>
+      <b>누구한테 · 총 얼마 · 몇 개월 · 언제부터</b>만 넣으면<br>
+      매달 갚는 돈이 가계부에 자동 기록되고,<br>얼마 남았고 언제 끝나는지 자동 계산됩니다.<br><br>
+      <button class="btn btn-primary" onclick="openLoanForm()">＋ 대여금 등록</button></div>`;
+    return;
+  }
+  const calcs = LOANS.map(l=>({ l, c: instCalc(l) }));
+  const bor = calcs.filter(x=>x.l.direction!=='lent');
+  const lent = calcs.filter(x=>x.l.direction==='lent');
+  const borRemain = bor.filter(x=>!x.c.done).reduce((s,x)=>s+x.c.remainAmt,0);
+  const lentRemain = lent.filter(x=>!x.c.done).reduce((s,x)=>s+x.c.remainAmt,0);
+  const thisPay = LOANS.filter(l=>l.direction!=='lent').reduce((s,l)=>s+instPayAt(l,THIS_YM),0);
+  const borAlive = bor.filter(x=>!x.c.done);
+  const maxEnd = borAlive.length ? borAlive.map(x=>x.c.endYm).sort().pop() : null;
+
+  let goalHtml;
+  if(!borAlive.length){
+    goalHtml = `<div class="lbl">갚을 돈</div><div class="big">0원 🎉</div><div class="kor">빌린 돈을 다 갚았습니다!</div>`;
+  }else{
+    const [ey,em] = maxEnd.split('-');
+    goalHtml = `
+      <div class="lbl">아직 갚아야 할 돈</div>
+      <div class="big">${fmtWon(borRemain)}</div>
+      <div class="kor">${fmtKor(borRemain)}</div>
+      <div class="diff" style="margin-top:12px">🎯 이대로 갚으면 <b>${Number(ey)}년 ${Number(em)}월</b>에 끝 (${ymDiff(maxEnd,THIS_YM)}개월 남음)</div>
+      <div class="split">
+        <div><div class="lbl">이번 달 상환</div><div class="val">${fmtKor(thisPay)}</div></div>
+        <div><div class="lbl">받을 돈(빌려준 것)</div><div class="val">${lentRemain?fmtKor(lentRemain):'없음'}</div></div>
+      </div>`;
+  }
+
+  const row = ({l,c:k}) => `
+    <div class="rec-item" onclick='openLoanForm(${JSON.stringify(l.id)})'>
+      <span class="nm">${esc(l.counterparty)}${l.ownerId?` <span class="muted">· ${esc(memberName(l.ownerId))}</span>`:''}${l.memo?` <span class="muted">· ${esc(l.memo)}</span>`:''}
+        <div class="rec-sub">${l.firstYm.replace('-','.')} 시작 · ${Math.max(k.paidCnt,0)}/${l.months}회 · 매달 ${l.payDom}일 ${fmt(k.monthly)}원 · <b style="color:var(--accent)">${k.endYm.replace('-','.')} 끝</b></div>
+      </span>
+      <span class="amt">${k.done?'<span class="muted">완료</span>':'남은 '+fmtKor(k.remainAmt)}</span>
+    </div>`;
+  const borHtml = bor.length ? `<div class="card"><h3>💸 빌린 돈 (갚는 중)</h3>${bor.map(row).join('')}</div>` : '';
+  const lentHtml = lent.length ? `<div class="card"><h3>🤝 빌려준 돈 (받는 중)</h3>${lent.map(row).join('')}</div>` : '';
+
+  el.innerHTML = `
+    <div class="networth" style="background:linear-gradient(135deg,#2d5a7c,#44779a)">${goalHtml}</div>
+    ${borHtml}${lentHtml}
+    <div class="row" style="margin-top:16px; justify-content:center">
+      <button class="btn btn-ghost btn-sm" onclick="openLoanForm()">＋ 대여금 추가</button>
+    </div>
+    <div class="muted" style="text-align:center; margin-top:10px">매달 상환일에 가계부·달력에 자동 기록됩니다 (빌린 돈=지출, 빌려준 돈=수입)</div>`;
+}
+async function refreshLoans(){
+  LOANS = await api('loanList', TOKEN);
+  LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM);
+  renderLoans(); renderLedger();
+}
+function openLoanForm(id){
+  const it = id ? LOANS.find(l=>l.id===id) : null;
+  const dir = it ? it.direction : 'borrowed';
+  const ownerOpts = MEMBERS.filter(m=>m.active && m.isPerson!==false).map(m=>
+    `<option value="${m.id}" ${it&&it.ownerId===m.id?'selected':''}>${esc(m.displayName)}</option>`).join('');
+  openModal(`
+    <h2>${it?'대여금 수정':'대여금 등록'}</h2>
+    <div class="f-row"><div class="seg" id="loDirSeg">
+      <button type="button" class="plain ${dir==='borrowed'?'on':''}" data-d="borrowed">빌린 돈 (갚는 것)</button>
+      <button type="button" class="plain ${dir==='lent'?'on':''}" data-d="lent">빌려준 돈 (받는 것)</button>
+    </div></div>
+    <div class="f-row"><label>상대방 (누구한테/누구에게)</label><input id="loWho" placeholder="예: 김철수, 이모님" value="${it?esc(it.counterparty):''}"></div>
+    <div class="f-row"><label>총액 (갚을/받을 전체 금액)</label><input id="loTotal" inputmode="numeric" placeholder="0" value="${it?fmt(it.totalAmount):''}"><div class="kor-hint" id="loTotalHint">${it?'= '+fmtKor(it.totalAmount):''}</div></div>
+    <div class="f-row"><label>몇 개월에 나눠서</label><input id="loMonths" type="number" min="1" max="600" value="${it?it.months:12}"><div class="kor-hint" id="loMonthlyHint"></div></div>
+    <div class="f-row"><label>매달 며칠에</label><input id="loDom" type="number" min="1" max="31" value="${it?it.payDom:25}"></div>
+    <div class="f-row"><label>첫 상환 월 (언제부터)</label><input id="loFirst" type="month" value="${it?it.firstYm:THIS_YM}"></div>
+    <div class="f-row"><label>누구 (선택)</label><select id="loOwner"><option value="">공동/무관</option>${ownerOpts}</select></div>
+    <div class="f-row"><label>메모 (선택)</label><input id="loMemo" placeholder="예: 사업자금" value="${it?esc(it.memo):''}"></div>
+    <div class="m-actions">
+      ${it?'<button class="btn btn-danger" onclick="deleteLoan(\''+it.id+'\')">삭제</button>':''}
+      <button class="btn btn-primary" onclick="saveLoan('${it?it.id:''}')">저장</button>
+    </div>`);
+  let curDir = dir;
+  document.querySelectorAll('#loDirSeg button').forEach(b=>b.onclick = ()=>{
+    curDir = b.dataset.d;
+    document.querySelectorAll('#loDirSeg button').forEach(x=>x.classList.toggle('on', x===b));
+  });
+  window._getLoanDir = ()=>curDir;
+  moneyInput($('loTotal'), $('loTotalHint'));
+  const updM = ()=>{
+    const t = moneyVal($('loTotal')), n = Number($('loMonths').value||1);
+    $('loMonthlyHint').textContent = (t>0&&n>0) ? '→ 매달 약 '+fmt(Math.floor(t/n))+'원씩' : '';
+  };
+  $('loTotal').addEventListener('input', updM);
+  $('loMonths').addEventListener('input', updM);
+  updM();
+  if(!it) setTimeout(()=>$('loWho').focus(), 50);
+}
+async function saveLoan(id){
+  try{
+    await api('loanSave', TOKEN, { id:id||'', direction:window._getLoanDir(),
+      counterparty:$('loWho').value.trim(), totalAmount:moneyVal($('loTotal')),
+      months:Number($('loMonths').value||1), monthlyAmount:0,
+      payDom:Number($('loDom').value||25), firstYm:$('loFirst').value,
+      ownerId:$('loOwner').value, memo:$('loMemo').value.trim() });
+    closeModal(); toast('저장했습니다'); await refreshLoans();
+  }catch(e){ alert(e.message); reportError('saveLoan', e.message); }
+}
+async function deleteLoan(id){
+  if(!confirm('이 대여금을 삭제할까요?\n(이미 기록된 상환 내역은 남습니다)')) return;
+  try{ await api('loanDelete', TOKEN, id); closeModal(); toast('삭제했습니다'); await refreshLoans(); }
   catch(e){ alert(e.message); }
 }
 
