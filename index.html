@@ -240,8 +240,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v2.0.0';
+const VERSION = 'v2.0.1';
 const CHANGELOG = [
+  ['v2.0.1', '2026-07-20', '납입 회차만 적으면 시작 월·남은 회차·끝나는 달 자동 역산 — 달력 안 봐도 됨. 회당 평균액 검산 표시'],
   ['v2.0.0', '2026-07-20', '보험 탭 신설 — 실제 납입 회차·총액(기준값 보정)과 비과세 해지일 관리. 누적 납입액이 자산으로 보임'],
   ['v1.9.3', '2026-07-20', '카드마다 용도 메모 — "생활비 전용, 주유·차량" 식으로 적어두면 카드 목록에 노란 라벨로 표시'],
   ['v1.9.2', '2026-07-20', '보증금을 기존 고정지출(렌트·월세)에 연결 — 고르면 이름·명의·돌려받는 시기 자동 입력, 양쪽에 서로 표시'],
@@ -706,6 +707,7 @@ function openRecurringForm(id, presetCat){
       <div class="f-row"><label>그때까지 납입 회차</label><input id="rcBaseCnt" type="number" min="0" placeholder="예: 49" value="${it&&it.baseCount!=null?it.baseCount:''}"></div>
       <div class="f-row"><label>그때까지 납입 총액</label><input id="rcBaseAmt" inputmode="numeric" placeholder="예: 50,945,300" value="${it&&it.baseAmount?fmt(it.baseAmount):''}"><div class="kor-hint" id="rcBaseAmtHint">${it&&it.baseAmount?'= '+fmtKor(it.baseAmount):''}</div></div>
       <div class="f-row" style="margin-bottom:0"><label>비과세·해지 가능일 (선택)</label><input id="rcMaturity" type="date" value="${it&&it.maturityDate?it.maturityDate:''}"></div>
+      <div class="kor-hint" id="rcBaseHint" style="margin-top:8px"></div>
     </div>
     <div class="f-row"><label>메모 (선택)</label><input id="rcMemo" value="${it?esc(it.memo):''}"></div>
     ${it?`<div class="f-row"><label><input type="checkbox" id="rcActive" ${it.active?'checked':''} style="width:auto;margin-right:6px">사용 중 (끄면 체크리스트에서 숨김)</label></div>`:''}
@@ -725,6 +727,30 @@ function openRecurringForm(id, presetCat){
   };
   ['rcStart','rcTotal','rcAmt'].forEach(x=>$(x).addEventListener('input', updPeriod));
   updPeriod();
+  // 납입 회차만 적으면 시작 월을 역산해서 자동 정리
+  const updBase = ()=>{
+    const by = $('rcBaseYm').value, bc = Number($('rcBaseCnt').value||0), ba = moneyVal($('rcBaseAmt'));
+    const n = Number($('rcTotal').value||0);
+    if(!by || !bc){ $('rcBaseHint').innerHTML=''; return; }
+    const start = ymAdd(by, -(bc-1));
+    $('rcStart').value = start;                       // 처음 납부 월 자동 입력
+    let t = `→ <b>${start.replace('-','.')}부터 납입 시작</b>한 걸로 자동 계산`;
+    if(ba > 0){
+      const avg = Math.round(ba/bc);
+      const amt = moneyVal($('rcAmt'));
+      t += ` · 회당 평균 ${fmt(avg)}원${amt && Math.abs(avg-amt) <= amt*0.01 ? ' ✓ 월납액과 일치' : ''}`;
+    }
+    if(n > 0){
+      const end = ymAdd(start, n-1);
+      const remain = Math.max(n - bc, 0);
+      const amt = moneyVal($('rcAmt'));
+      t += `<br>→ 총 ${n}회 중 <b>남은 ${remain}회</b>${amt?` (약 ${fmtKor(remain*amt)})`:''} · <b>${end.replace('-','.')}에 납입 끝</b>`;
+    }
+    $('rcBaseHint').innerHTML = t;
+    updPeriod();
+  };
+  ['rcBaseYm','rcBaseCnt','rcBaseAmt','rcTotal','rcAmt'].forEach(x=>$(x).addEventListener('input', updBase));
+  updBase();
   if(!it) setTimeout(()=>$('rcName').focus(), 50);
 }
 async function saveRecurring(id){
@@ -1419,11 +1445,17 @@ function renderInsurance(){
   const monthlySum = items.reduce((s,r)=>s+Number(r.amount), 0);
   const rows = items.map(r=>{
     const e = effPaid(r);
-    const p = recurPeriod(r);
+    // 시작 월: 직접 입력값이 있으면 그걸, 없으면 회차에서 역산
+    const dispStart = r.startYm || (r.baseYm && r.baseCount ? ymAdd(r.baseYm, -(Number(r.baseCount)-1)) : null);
+    let periodTxt = '';
+    if(r.totalMonths && dispStart){
+      const end = ymAdd(dispStart, Number(r.totalMonths)-1);
+      const remain = Math.max(Number(r.totalMonths) - e.cnt, 0);
+      periodTxt = ` · 남은 ${remain}회 (약 ${fmtKor(remain*Number(r.amount))}) · <b style="color:var(--accent)">${end.replace('-','.')} 납입 끝</b>`;
+    }
     return `<div class="rec-item" onclick='openRecurringForm(${JSON.stringify(r.id)})'>
       <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}
-        <div class="rec-sub"><b>${e.cnt}회 납입 · 누적 ${fmtKor(e.amt)}</b>${e.real?'':' (추정)'}
-          ${p&&p.endYm?` · ${p.endYm.replace('-','.')} 납입 끝`:''}</div>
+        <div class="rec-sub">${dispStart?dispStart.replace('-','.')+' 시작 · ':''}<b>${e.cnt}${r.totalMonths?'/'+r.totalMonths:''}회 납입 · 누적 ${fmtKor(e.amt)}</b>${e.real?'':' (추정)'}${periodTxt}</div>
         ${r.maturityDate?`<div class="rec-sub">${maturityTxt(r.maturityDate)}</div>`:''}
       </span>
       <span class="amt">월 ${fmt(r.amount)}원</span>
