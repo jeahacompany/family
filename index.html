@@ -234,8 +234,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.6.1';
+const VERSION = 'v1.7.0';
 const CHANGELOG = [
+  ['v1.7.0', '2026-07-20', '고정지출에 기간 개념 — 처음 납부 월·총 개월 수 입력하면 지금까지 몇 회/얼마 냈고 언제 끝나는지 자동 계산 (렌트·대출·적금용). 끝난 뒤엔 자동 기록도 멈춤'],
   ['v1.6.1', '2026-07-20', '카드탭 맨 위에 총한도/할부 중/남은 한도 요약 + 한도 사용률 게이지 추가'],
   ['v1.6.0', '2026-07-20', '카드·할부 탭 신설 — 남은 할부 총액·언제 끝나는지·월별 감소 그래프, 결제일에 가계부 자동 기록. 가계부 입력에 단발/고정 선택 추가'],
   ['v1.5.1', '2026-07-20', '내역마다 고정지출 여부 표시 — 목록에 초록 "고정" 라벨, 수정 화면에 고정지출 안내·설정 바로가기'],
@@ -555,10 +556,14 @@ function recurringCard(rows){
   const total = items.reduce((s,r)=>s+Number(r.amount),0);
   const list = items.map(r=>{
     const out = linked.has(r.id);   // 이 달 가계부에 들어가 있는지 (삭제로 뺐으면 false)
+    const p = recurPeriod(r);
+    const sub = p
+      ? `${p.startTxt} 시작 · <b>${p.cnt}${r.totalMonths?'/'+r.totalMonths:''}회</b> 납부 · 누적 ${fmtKor(p.paidAmt)}${p.endYm?` · <b style="color:var(--accent)">${p.endYm.replace('-','.')} 끝</b>`:''}`
+      : `누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}`;
     return `<div class="rec-item" onclick='openRecurringForm(${JSON.stringify(r.id)})'>
       <span class="dd">${r.dom}일</span>
       <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}
-        <div class="rec-sub">누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}${out?'':' · <b style="color:#e8871e">이번 달 뺌</b>'}</div>
+        <div class="rec-sub">${sub}${out?'':' · <b style="color:#e8871e">이번 달 뺌</b>'}</div>
       </span>
       <span class="amt">${fmt(r.amount)}원</span>
       ${out?'':`<button class="btn btn-ghost btn-sm" onclick='event.stopPropagation();toggleRecurring(${JSON.stringify(r.id)},true)'>넣기</button>`}
@@ -570,6 +575,19 @@ function recurringCard(rows){
     ${list}
     <div class="muted" style="margin-top:8px">매달 자동으로 가계부에 들어갑니다. 안 나간 달은 그 달 내역에서 삭제하면 됩니다</div>
   </div>`;
+}
+/* 기간 있는 고정지출(렌트·대출·적금)의 납부 현황 계산 */
+function recurPeriod(r){
+  if(!r.startYm) return null;
+  const idx = ymDiff(THIS_YM, r.startYm);            // 시작 월부터 몇 번째 달인지
+  let cnt = Math.max(idx+1, 0);                       // 지금까지 낸 회차 (매달 냈다고 가정)
+  if(r.totalMonths) cnt = Math.min(cnt, r.totalMonths);
+  const paidAmt = cnt * Number(r.amount);
+  const endYm = r.totalMonths ? ymAdd(r.startYm, r.totalMonths-1) : null;
+  const remainCnt = r.totalMonths ? Math.max(r.totalMonths - cnt, 0) : null;
+  return { cnt, paidAmt, endYm, remainCnt,
+    remainAmt: remainCnt!=null ? remainCnt*Number(r.amount) : null,
+    startTxt: r.startYm.replace('-','.') };
 }
 async function toggleRecurring(id, checked){
   try{
@@ -636,6 +654,8 @@ function openRecurringForm(id){
     <div class="f-row"><label>이름</label><input id="rcName" placeholder="예: 통신비, 자동차보험, 넷플릭스" value="${it?esc(it.name):''}"></div>
     <div class="f-row"><label>금액 (매달)</label><input id="rcAmt" inputmode="numeric" placeholder="0" value="${it?fmt(it.amount):''}"><div class="kor-hint" id="rcAmtHint">${it?'= '+fmtKor(it.amount):''}</div></div>
     <div class="f-row"><label>매달 며칠에 나가나 (1~31)</label><input id="rcDom" type="number" min="1" max="31" value="${it?it.dom:25}"></div>
+    <div class="f-row"><label>처음 납부 월 (선택 — 렌트·대출·적금처럼 기간 있는 것)</label><input id="rcStart" type="month" value="${it&&it.startYm?it.startYm:''}"></div>
+    <div class="f-row"><label>총 개월 수 (선택 — 비우면 계속 나감)</label><input id="rcTotal" type="number" min="1" max="600" value="${it&&it.totalMonths?it.totalMonths:''}"><div class="kor-hint" id="rcPeriodHint"></div></div>
     <div class="f-row"><label>분류</label><select id="rcCat">${catOpts}</select></div>
     <div class="f-row"><label>누구 (선택)</label><select id="rcOwner"><option value="">공동/무관</option>${ownerOpts}</select></div>
     <div class="f-row"><label>메모 (선택)</label><input id="rcMemo" value="${it?esc(it.memo):''}"></div>
@@ -645,6 +665,16 @@ function openRecurringForm(id){
       <button class="btn btn-primary" onclick="saveRecurring('${it?it.id:''}')">저장</button>
     </div>`);
   moneyInput($('rcAmt'), $('rcAmtHint'));
+  // 기간 입력 시 "지금까지 몇 회·언제 끝" 미리보기
+  const updPeriod = ()=>{
+    const s = $('rcStart').value, n = Number($('rcTotal').value||0), amt = moneyVal($('rcAmt'));
+    if(!s){ $('rcPeriodHint').textContent = ''; return; }
+    const p = recurPeriod({ startYm:s, totalMonths:n||null, amount:amt });
+    $('rcPeriodHint').textContent = `→ 지금까지 ${p.cnt}${n?'/'+n:''}회 · 누적 ${fmtKor(p.paidAmt)}`
+      + (p.endYm ? ` · ${p.endYm.replace('-','.')}에 끝 (남은 ${p.remainCnt}회)` : '');
+  };
+  ['rcStart','rcTotal','rcAmt'].forEach(x=>$(x).addEventListener('input', updPeriod));
+  updPeriod();
   if(!it) setTimeout(()=>$('rcName').focus(), 50);
 }
 async function saveRecurring(id){
@@ -652,7 +682,8 @@ async function saveRecurring(id){
     const info = {
       id: id||'', name: $('rcName').value.trim(), amount: moneyVal($('rcAmt')),
       dom: Number($('rcDom').value||1), category: $('rcCat').value,
-      ownerId: $('rcOwner').value, memo: $('rcMemo').value.trim()
+      ownerId: $('rcOwner').value, memo: $('rcMemo').value.trim(),
+      startYm: $('rcStart').value || '', totalMonths: $('rcTotal').value || ''
     };
     if(id) info.active = $('rcActive').checked;
     await api('recurringSave', TOKEN, info);
@@ -700,7 +731,11 @@ function openLedgerForm(id, presetDate){
     ${!it?`<div class="f-row" id="ledRepRow"><div class="seg" id="ledRepSeg">
       <button type="button" class="plain on" data-r="once">단발 (한 번만)</button>
       <button type="button" class="plain" data-r="fixed">고정 (매달 반복)</button>
-    </div><div class="kor-hint" id="ledRepHint"></div></div>`:''}
+    </div><div class="kor-hint" id="ledRepHint"></div></div>
+    <div id="ledFixedExtra" style="display:none">
+      <div class="f-row"><label>처음 납부 월 (선택 — 렌트·대출처럼 예전부터 낸 것)</label><input id="ledStart" type="month"></div>
+      <div class="f-row"><label>총 개월 수 (선택 — 비우면 계속 나감)</label><input id="ledTotal" type="number" min="1" max="600" placeholder="예: 렌트 60개월"><div class="kor-hint" id="ledPeriodHint"></div></div>
+    </div>`:''}
     <div class="f-row"><label>금액</label><input id="ledAmt" inputmode="numeric" placeholder="0" value="${it?fmt(it.amount):''}"><div class="kor-hint" id="ledAmtHint">${it?'= '+fmtKor(it.amount):''}</div></div>
     <div class="f-row"><label>날짜</label><input id="ledDate" type="date" value="${it?it.date:(presetDate||today())}"></div>
     <div class="f-row"><label>분류</label><select id="ledCat"></select></div>
@@ -729,7 +764,18 @@ function openLedgerForm(id, presetDate){
     curRep = b.dataset.r;
     document.querySelectorAll('#ledRepSeg button').forEach(x=>x.classList.toggle('on', x===b));
     $('ledRepHint').textContent = curRep==='fixed' ? '매달 이 날짜에 자동으로 기록됩니다 (고정지출로 등록됨)' : '';
+    if($('ledFixedExtra')) $('ledFixedExtra').style.display = curRep==='fixed' ? 'block' : 'none';
   });
+  if($('ledFixedExtra')){
+    const updP = ()=>{
+      const s = $('ledStart').value, n = Number($('ledTotal').value||0), amt = moneyVal($('ledAmt'));
+      if(!s){ $('ledPeriodHint').textContent=''; return; }
+      const p = recurPeriod({ startYm:s, totalMonths:n||null, amount:amt });
+      $('ledPeriodHint').textContent = `→ 지금까지 ${p.cnt}${n?'/'+n:''}회 · 누적 ${fmtKor(p.paidAmt)}`
+        + (p.endYm ? ` · ${p.endYm.replace('-','.')}에 끝` : '');
+    };
+    ['ledStart','ledTotal','ledAmt'].forEach(x=>$(x).addEventListener('input', updP));
+  }
   $('modalBox').dataset.kind = kind;
   window._getLedKind = ()=>curKind;
   window._getLedRep = ()=>curRep;
@@ -745,7 +791,8 @@ async function saveLedger(id){
       await api('recurringSave', TOKEN, {
         name: memo || $('ledCat').value, amount: moneyVal($('ledAmt')),
         dom: Number(($('ledDate').value||today()).slice(8)),
-        category: $('ledCat').value, ownerId: $('ledOwner').value, memo: ''
+        category: $('ledCat').value, ownerId: $('ledOwner').value, memo: '',
+        startYm: $('ledStart')?$('ledStart').value:'', totalMonths: $('ledTotal')?$('ledTotal').value:''
       });
       RECURRING = await api('recurringList', TOKEN);
       closeModal(); toast('고정지출로 등록했습니다');
