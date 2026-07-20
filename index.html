@@ -200,9 +200,10 @@ footer button{color:#9aa3b5; text-decoration:underline}
     </div>
     <!-- 재산현황/자산 탭은 숨김 (데이터는 유지 — 다시 켜려면 display:none 제거) -->
     <div class="tabs">
-      <button id="tabBtn-ledger" class="on" onclick="showTab('ledger')">지출·가계부</button>
+      <button id="tabBtn-ledger" class="on" onclick="showTab('ledger')">가계부</button>
       <button id="tabBtn-cards" onclick="showTab('cards')">카드·할부</button>
       <button id="tabBtn-loans" onclick="showTab('loans')">대여금</button>
+      <button id="tabBtn-deposits" onclick="showTab('deposits')">보증금</button>
       <button id="tabBtn-home" style="display:none" onclick="showTab('home')">재산현황</button>
       <button id="tabBtn-assets" style="display:none" onclick="showTab('assets')">자산</button>
     </div>
@@ -213,6 +214,7 @@ footer button{color:#9aa3b5; text-decoration:underline}
   <div id="tab-ledger"></div>
   <div id="tab-cards" style="display:none"></div>
   <div id="tab-loans" style="display:none"></div>
+  <div id="tab-deposits" style="display:none"></div>
   <div id="tab-home" style="display:none"></div>
   <div id="tab-assets" style="display:none"></div>
   <footer>
@@ -236,8 +238,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.8.0';
+const VERSION = 'v1.9.0';
 const CHANGELOG = [
+  ['v1.9.0', '2026-07-20', '보증금 탭 신설 — 렌트·집 보증금 등록, 묶여있는 돈 합계와 돌려받는 시기 관리. 재산으로 자동 분류'],
   ['v1.8.0', '2026-07-20', '대여금 탭 신설 — 개인 간 빌린 돈/빌려준 돈, 매달 상환이 가계부에 자동 기록, 남은 금액·언제 끝나는지 자동 계산'],
   ['v1.7.0', '2026-07-20', '고정지출에 기간 개념 — 처음 납부 월·총 개월 수 입력하면 지금까지 몇 회/얼마 냈고 언제 끝나는지 자동 계산 (렌트·대출·적금용). 끝난 뒤엔 자동 기록도 멈춤'],
   ['v1.6.1', '2026-07-20', '카드탭 맨 위에 총한도/할부 중/남은 한도 요약 + 한도 사용률 게이지 추가'],
@@ -358,11 +361,11 @@ async function reload(){
 /* ---------- 탭 ---------- */
 function showTab(t){
   curTab=t;
-  ['home','ledger','assets','cards','loans'].forEach(x=>{
+  ['home','ledger','assets','cards','loans','deposits'].forEach(x=>{
     $('tab-'+x).style.display = x===t?'block':'none';
     $('tabBtn-'+x).classList.toggle('on', x===t);
   });
-  $('fabBtn').style.display = (t==='ledger'||t==='assets'||t==='cards'||t==='loans') ? 'block' : 'none';
+  $('fabBtn').style.display = (t==='ledger'||t==='assets'||t==='cards'||t==='loans'||t==='deposits') ? 'block' : 'none';
   window.scrollTo(0,0);
 }
 function fabClick(){
@@ -370,8 +373,9 @@ function fabClick(){
   else if(curTab==='assets') openAssetForm();
   else if(curTab==='cards'){ CARDS.length ? openInstForm() : openCardForm(); }
   else if(curTab==='loans') openLoanForm();
+  else if(curTab==='deposits') openDepositForm();
 }
-function renderAll(){ renderHome(); renderLedger(); renderAssets(); renderCards(); renderLoans(); showTab(curTab); }
+function renderAll(){ renderHome(); renderLedger(); renderAssets(); renderCards(); renderLoans(); renderDeposits(); showTab(curTab); }
 
 /* ============================================================
    ① 재산현황
@@ -1243,6 +1247,75 @@ async function saveLoan(id){
 async function deleteLoan(id){
   if(!confirm('이 대여금을 삭제할까요?\n(이미 기록된 상환 내역은 남습니다)')) return;
   try{ await api('loanDelete', TOKEN, id); closeModal(); toast('삭제했습니다'); await refreshLoans(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ============================================================
+   보증금 — 렌트·집 보증금 (내부적으로는 자산(분류 '보증금')으로 저장
+   → 나중에 재산현황을 켜면 자동으로 재산에 합산됨)
+   ============================================================ */
+function depositList(){ return ASSETS.filter(a=>a.category==='보증금' && !a.isDebt); }
+function renderDeposits(){
+  const el = $('tab-deposits'); if(!el) return;
+  const items = depositList();
+  if(!items.length){
+    el.innerHTML = `<div class="empty" style="padding-top:60px">
+      렌트 보증금, 집 보증금(전세금)처럼<br><b>나중에 돌려받는 돈</b>을 등록하세요.<br>
+      묶여있는 돈이 얼마인지 보이고,<br>나중에 재산으로도 자동 합산됩니다.<br><br>
+      <button class="btn btn-primary" onclick="openDepositForm()">＋ 보증금 등록</button></div>`;
+    return;
+  }
+  const total = items.reduce((s,a)=>s+Number(a.value),0);
+  const rows = items.map(a=>`
+    <div class="rec-item" onclick='openDepositForm(${JSON.stringify(a.id)})'>
+      <span class="nm">${esc(a.name)}${a.ownerId?` <span class="muted">· ${esc(memberName(a.ownerId))}</span>`:''}
+        <div class="rec-sub">${a.returnYm?`<b style="color:var(--accent)">${a.returnYm.replace('-','.')} 돌려받음</b>`:'반환 시기 미정'}${a.memo?' · '+esc(a.memo):''}</div>
+      </span>
+      <span class="amt">${fmtKor(a.value)}</span>
+    </div>`).join('');
+  el.innerHTML = `
+    <div class="networth" style="background:linear-gradient(135deg,#1d6b50,#2f8f6e)">
+      <div class="lbl">묶여있는 보증금 (나중에 돌려받을 돈)</div>
+      <div class="big">${fmtWon(total)}</div>
+      <div class="kor">${fmtKor(total)} · ${items.length}건</div>
+      <div class="diff" style="margin-top:10px">💡 보증금은 지출이 아니라 <b>재산</b>입니다 — 나중에 재산현황에 자동 합산돼요</div>
+    </div>
+    <div class="card"><h3>보증금 목록</h3>${rows}</div>
+    <div class="row" style="margin-top:16px; justify-content:center">
+      <button class="btn btn-ghost btn-sm" onclick="openDepositForm()">＋ 보증금 추가</button>
+    </div>`;
+}
+function openDepositForm(id){
+  const it = id ? ASSETS.find(a=>a.id===id) : null;
+  const ownerOpts = MEMBERS.filter(m=>m.active && m.isPerson!==false).map(m=>
+    `<option value="${m.id}" ${it&&it.ownerId===m.id?'selected':''}>${esc(m.displayName)}</option>`).join('');
+  openModal(`
+    <h2>${it?'보증금 수정':'보증금 등록'}</h2>
+    <div class="f-row"><label>어떤 보증금인가</label><input id="dpName" placeholder="예: 주니퍼Y 렌트 보증금, OO아파트 전세금" value="${it?esc(it.name):''}"></div>
+    <div class="f-row"><label>금액</label><input id="dpVal" inputmode="numeric" placeholder="0" value="${it?fmt(it.value):''}"><div class="kor-hint" id="dpValHint">${it?'= '+fmtKor(it.value):''}</div></div>
+    <div class="f-row"><label>언제 돌려받나 (선택 — 계약 종료 월)</label><input id="dpReturn" type="month" value="${it&&it.returnYm?it.returnYm:''}"></div>
+    <div class="f-row"><label>누구 명의</label><select id="dpOwner">${ownerOpts}</select></div>
+    <div class="f-row"><label>메모 (선택)</label><input id="dpMemo" placeholder="예: 계약서 서랍에 있음" value="${it?esc(it.memo):''}"></div>
+    <div class="m-actions">
+      ${it?'<button class="btn btn-danger" onclick="deleteDeposit(\''+it.id+'\')">삭제</button>':''}
+      <button class="btn btn-primary" onclick="saveDeposit('${it?it.id:''}')">저장</button>
+    </div>`);
+  moneyInput($('dpVal'), $('dpValHint'));
+  if(!it) setTimeout(()=>$('dpName').focus(), 50);
+}
+async function saveDeposit(id){
+  try{
+    await api('assetSave', TOKEN, {
+      id: id||'', ownerId: $('dpOwner').value, name: $('dpName').value.trim(),
+      category: '보증금', isDebt: false, value: moneyVal($('dpVal')),
+      memo: $('dpMemo').value.trim(), returnYm: $('dpReturn').value || ''
+    });
+    closeModal(); toast('저장했습니다'); await reload();
+  }catch(e){ alert(e.message); reportError('saveDeposit', e.message); }
+}
+async function deleteDeposit(id){
+  if(!confirm('이 보증금을 삭제할까요?')) return;
+  try{ await api('assetDelete', TOKEN, id); closeModal(); toast('삭제했습니다'); await reload(); }
   catch(e){ alert(e.message); }
 }
 
