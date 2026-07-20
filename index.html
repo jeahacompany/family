@@ -238,8 +238,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.9.1';
+const VERSION = 'v1.9.2';
 const CHANGELOG = [
+  ['v1.9.2', '2026-07-20', '보증금을 기존 고정지출(렌트·월세)에 연결 — 고르면 이름·명의·돌려받는 시기 자동 입력, 양쪽에 서로 표시'],
   ['v1.9.1', '2026-07-20', '대여금 상환도 "매달 고정지출" 목록·총액에 포함 (기간 끝날 때까지 고정이니까)'],
   ['v1.9.0', '2026-07-20', '보증금 탭 신설 — 렌트·집 보증금 등록, 묶여있는 돈 합계와 돌려받는 시기 관리. 재산으로 자동 분류'],
   ['v1.8.0', '2026-07-20', '대여금 탭 신설 — 개인 간 빌린 돈/빌려준 돈, 매달 상환이 가계부에 자동 기록, 남은 금액·언제 끝나는지 자동 계산'],
@@ -576,9 +577,12 @@ function recurringCard(rows){
       const r = m.r;
       const out = linked.has(r.id);   // 이 달 가계부에 들어가 있는지 (삭제로 뺐으면 false)
       const p = recurPeriod(r);
-      const sub = p
+      const depSum = ASSETS.filter(a=>a.category==='보증금' && !a.isDebt && a.linkedRecurringId===r.id)
+        .reduce((s,a)=>s+Number(a.value),0);
+      const sub = (p
         ? `${p.startTxt} 시작 · <b>${p.cnt}${r.totalMonths?'/'+r.totalMonths:''}회</b> 납부 · 누적 ${fmtKor(p.paidAmt)}${p.endYm?` · <b style="color:var(--accent)">${p.endYm.replace('-','.')} 끝</b>`:''}`
-        : `누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}`;
+        : `누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}`)
+        + (depSum?` · <b style="color:#1d6b50">보증금 ${fmtKor(depSum)}</b>`:'');
       return `<div class="rec-item" onclick='openRecurringForm(${JSON.stringify(r.id)})'>
         <span class="dd">${r.dom}일</span>
         <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}
@@ -1286,13 +1290,16 @@ function renderDeposits(){
     return;
   }
   const total = items.reduce((s,a)=>s+Number(a.value),0);
-  const rows = items.map(a=>`
+  const rows = items.map(a=>{
+    const link = a.linkedRecurringId ? RECURRING.find(r=>r.id===a.linkedRecurringId) : null;
+    return `
     <div class="rec-item" onclick='openDepositForm(${JSON.stringify(a.id)})'>
       <span class="nm">${esc(a.name)}${a.ownerId?` <span class="muted">· ${esc(memberName(a.ownerId))}</span>`:''}
-        <div class="rec-sub">${a.returnYm?`<b style="color:var(--accent)">${a.returnYm.replace('-','.')} 돌려받음</b>`:'반환 시기 미정'}${a.memo?' · '+esc(a.memo):''}</div>
+        <div class="rec-sub">${link?`🔗 ${esc(link.name)} · `:''}${a.returnYm?`<b style="color:var(--accent)">${a.returnYm.replace('-','.')} 돌려받음</b>`:'반환 시기 미정'}${a.memo?' · '+esc(a.memo):''}</div>
       </span>
       <span class="amt">${fmtKor(a.value)}</span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   el.innerHTML = `
     <div class="networth" style="background:linear-gradient(135deg,#1d6b50,#2f8f6e)">
       <div class="lbl">묶여있는 보증금 (나중에 돌려받을 돈)</div>
@@ -1309,8 +1316,12 @@ function openDepositForm(id){
   const it = id ? ASSETS.find(a=>a.id===id) : null;
   const ownerOpts = MEMBERS.filter(m=>m.active && m.isPerson!==false).map(m=>
     `<option value="${m.id}" ${it&&it.ownerId===m.id?'selected':''}>${esc(m.displayName)}</option>`).join('');
+  const recOpts = RECURRING.filter(r=>r.active).map(r=>
+    `<option value="${r.id}" ${it&&it.linkedRecurringId===r.id?'selected':''}>${esc(r.name)} (매달 ${fmt(r.amount)}원)</option>`).join('');
   openModal(`
     <h2>${it?'보증금 수정':'보증금 등록'}</h2>
+    <div class="f-row"><label>어느 계약의 보증금인가 (연결하면 이름·시기 자동 입력)</label>
+      <select id="dpLink"><option value="">연결 안 함 (직접 입력)</option>${recOpts}</select></div>
     <div class="f-row"><label>어떤 보증금인가</label><input id="dpName" placeholder="예: 주니퍼Y 렌트 보증금, OO아파트 전세금" value="${it?esc(it.name):''}"></div>
     <div class="f-row"><label>금액</label><input id="dpVal" inputmode="numeric" placeholder="0" value="${it?fmt(it.value):''}"><div class="kor-hint" id="dpValHint">${it?'= '+fmtKor(it.value):''}</div></div>
     <div class="f-row"><label>언제 돌려받나 (선택 — 계약 종료 월)</label><input id="dpReturn" type="month" value="${it&&it.returnYm?it.returnYm:''}"></div>
@@ -1321,6 +1332,15 @@ function openDepositForm(id){
       <button class="btn btn-primary" onclick="saveDeposit('${it?it.id:''}')">저장</button>
     </div>`);
   moneyInput($('dpVal'), $('dpValHint'));
+  // 고정지출 선택 → 이름·명의·돌려받는 시기 자동 채움
+  $('dpLink').addEventListener('change', ()=>{
+    const r = RECURRING.find(x=>x.id===$('dpLink').value);
+    if(!r) return;
+    if(!$('dpName').value.trim() || $('dpName').value.endsWith('보증금')) $('dpName').value = r.name+' 보증금';
+    if(r.ownerId) $('dpOwner').value = r.ownerId;
+    const p = recurPeriod(r);
+    if(p && p.endYm) $('dpReturn').value = p.endYm;
+  });
   if(!it) setTimeout(()=>$('dpName').focus(), 50);
 }
 async function saveDeposit(id){
@@ -1328,7 +1348,8 @@ async function saveDeposit(id){
     await api('assetSave', TOKEN, {
       id: id||'', ownerId: $('dpOwner').value, name: $('dpName').value.trim(),
       category: '보증금', isDebt: false, value: moneyVal($('dpVal')),
-      memo: $('dpMemo').value.trim(), returnYm: $('dpReturn').value || ''
+      memo: $('dpMemo').value.trim(), returnYm: $('dpReturn').value || '',
+      linkedRecurringId: $('dpLink').value || ''
     });
     closeModal(); toast('저장했습니다'); await reload();
   }catch(e){ alert(e.message); reportError('saveDeposit', e.message); }
