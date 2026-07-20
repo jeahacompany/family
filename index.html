@@ -198,17 +198,19 @@ footer button{color:#9aa3b5; text-decoration:underline}
       <h1>🏠 우리집 지출관리<span class="who" id="whoami"></span></h1>
       <button class="gear" onclick="openSettings()">⚙️</button>
     </div>
-    <!-- 지출 전용 모드: 재산현황/자산 탭 숨김 (데이터는 유지 — 다시 켜려면 display:none 제거) -->
-    <div class="tabs" style="display:none">
+    <!-- 재산현황/자산 탭은 숨김 (데이터는 유지 — 다시 켜려면 display:none 제거) -->
+    <div class="tabs">
       <button id="tabBtn-ledger" class="on" onclick="showTab('ledger')">지출·가계부</button>
-      <button id="tabBtn-home" onclick="showTab('home')">재산현황</button>
-      <button id="tabBtn-assets" onclick="showTab('assets')">자산</button>
+      <button id="tabBtn-cards" onclick="showTab('cards')">카드·할부</button>
+      <button id="tabBtn-home" style="display:none" onclick="showTab('home')">재산현황</button>
+      <button id="tabBtn-assets" style="display:none" onclick="showTab('assets')">자산</button>
     </div>
   </div>
 </header>
 
 <div class="wrap">
   <div id="tab-ledger"></div>
+  <div id="tab-cards" style="display:none"></div>
   <div id="tab-home" style="display:none"></div>
   <div id="tab-assets" style="display:none"></div>
   <footer>
@@ -232,8 +234,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.5.1';
+const VERSION = 'v1.6.0';
 const CHANGELOG = [
+  ['v1.6.0', '2026-07-20', '카드·할부 탭 신설 — 남은 할부 총액·언제 끝나는지·월별 감소 그래프, 결제일에 가계부 자동 기록. 가계부 입력에 단발/고정 선택 추가'],
   ['v1.5.1', '2026-07-20', '내역마다 고정지출 여부 표시 — 목록에 초록 "고정" 라벨, 수정 화면에 고정지출 안내·설정 바로가기'],
   ['v1.5.0', '2026-07-20', '고정지출 완전 자동 기록(체크 불필요), 지난달 대비 비교 + 월별 지출 흐름 그래프, 고정지출별 누적 납부 횟수·총액 표시'],
   ['v1.4.0', '2026-07-20', '지출 전용 화면으로 단순화 — 재산현황·자산 탭 숨김 (데이터는 그대로, 나중에 다시 켤 수 있음)'],
@@ -252,7 +255,7 @@ const INC_CATS = ['급여','사업소득','용돈','이자·배당','기타'];
 
 /* ---------- 상태 ---------- */
 let TOKEN = localStorage.getItem('fam_token') || '';
-let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], THIS_YM='';
+let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], THIS_YM='';
 let LEDGER={};          // { 'YYYY-MM': [entries] }
 let curTab='ledger', curYM='';
 
@@ -319,6 +322,7 @@ function csvDownload(filename, rows){
 function showLogin(){ $('appView').style.display='none'; $('loginView').style.display='flex'; }
 function applyBoot(r){
   ME=r.me; MEMBERS=r.members; ASSETS=r.assets; TOTALS=r.totals; SNAPSHOTS=r.snapshots; RECURRING=r.recurring||[]; MONTHLY=r.monthly||[];
+  if(r.cardData){ CARDS=r.cardData.cards||[]; INSTS=r.cardData.installments||[]; }
   THIS_YM=r.thisMonth; curYM = curYM || r.thisMonth; LEDGER[r.thisMonth]=r.ledger;
   $('whoami').textContent = ' · '+ME.displayName;
   $('verTxt').textContent = VERSION;
@@ -348,15 +352,19 @@ async function reload(){
 /* ---------- 탭 ---------- */
 function showTab(t){
   curTab=t;
-  ['home','ledger','assets'].forEach(x=>{
+  ['home','ledger','assets','cards'].forEach(x=>{
     $('tab-'+x).style.display = x===t?'block':'none';
     $('tabBtn-'+x).classList.toggle('on', x===t);
   });
-  $('fabBtn').style.display = (t==='ledger'||t==='assets') ? 'block' : 'none';
+  $('fabBtn').style.display = (t==='ledger'||t==='assets'||t==='cards') ? 'block' : 'none';
   window.scrollTo(0,0);
 }
-function fabClick(){ if(curTab==='ledger') openLedgerForm(); else if(curTab==='assets') openAssetForm(); }
-function renderAll(){ renderHome(); renderLedger(); renderAssets(); showTab(curTab); }
+function fabClick(){
+  if(curTab==='ledger') openLedgerForm();
+  else if(curTab==='assets') openAssetForm();
+  else if(curTab==='cards'){ CARDS.length ? openInstForm() : openCardForm(); }
+}
+function renderAll(){ renderHome(); renderLedger(); renderAssets(); renderCards(); showTab(curTab); }
 
 /* ============================================================
    ① 재산현황
@@ -688,6 +696,10 @@ function openLedgerForm(id, presetDate){
       <button type="button" class="exp ${kind==='expense'?'on':''}" data-k="expense">지출</button>
       <button type="button" class="inc ${kind==='income'?'on':''}" data-k="income">수입</button>
     </div></div>
+    ${!it?`<div class="f-row" id="ledRepRow"><div class="seg" id="ledRepSeg">
+      <button type="button" class="plain on" data-r="once">단발 (한 번만)</button>
+      <button type="button" class="plain" data-r="fixed">고정 (매달 반복)</button>
+    </div><div class="kor-hint" id="ledRepHint"></div></div>`:''}
     <div class="f-row"><label>금액</label><input id="ledAmt" inputmode="numeric" placeholder="0" value="${it?fmt(it.amount):''}"><div class="kor-hint" id="ledAmtHint">${it?'= '+fmtKor(it.amount):''}</div></div>
     <div class="f-row"><label>날짜</label><input id="ledDate" type="date" value="${it?it.date:(presetDate||today())}"></div>
     <div class="f-row"><label>분류</label><select id="ledCat"></select></div>
@@ -697,9 +709,10 @@ function openLedgerForm(id, presetDate){
       ${it?'<button class="btn btn-danger" onclick="deleteLedger(\''+it.id+'\')">삭제</button>':''}
       <button class="btn btn-primary" onclick="saveLedger('${it?it.id:''}')">저장</button>
     </div>`);
-  let curKind = kind;
+  let curKind = kind, curRep = 'once';
   const fillCats = ()=>{
-    const cats = curKind==='expense' ? EXP_CATS : INC_CATS;
+    let cats = curKind==='expense' ? EXP_CATS.slice() : INC_CATS.slice();
+    if(it && !cats.includes(it.category)) cats.unshift(it.category);  // 자동 기록된 '카드할부' 등
     $('ledCat').innerHTML = cats.map(c=>`<option ${it&&it.category===c?'selected':''}>${c}</option>`).join('');
   };
   fillCats();
@@ -707,16 +720,39 @@ function openLedgerForm(id, presetDate){
     curKind = b.dataset.k;
     document.querySelectorAll('#ledKindSeg button').forEach(x=>x.classList.toggle('on', x===b));
     fillCats();
+    // 고정(매달 반복)은 지출만 가능
+    if($('ledRepRow')) $('ledRepRow').style.display = curKind==='expense' ? 'block' : 'none';
+    if(curKind!=='expense') curRep='once';
+  });
+  document.querySelectorAll('#ledRepSeg button').forEach(b=>b.onclick = ()=>{
+    curRep = b.dataset.r;
+    document.querySelectorAll('#ledRepSeg button').forEach(x=>x.classList.toggle('on', x===b));
+    $('ledRepHint').textContent = curRep==='fixed' ? '매달 이 날짜에 자동으로 기록됩니다 (고정지출로 등록됨)' : '';
   });
   $('modalBox').dataset.kind = kind;
   window._getLedKind = ()=>curKind;
+  window._getLedRep = ()=>curRep;
   moneyInput($('ledAmt'), $('ledAmtHint'));
   if(!it) setTimeout(()=>$('ledAmt').focus(), 50);
 }
 async function saveLedger(id){
   try{
+    const kind = window._getLedKind();
+    // 신규 + "고정(매달 반복)" 선택 → 고정지출로 등록 (이번 달 내역은 자동 생성됨)
+    if(!id && kind==='expense' && window._getLedRep && window._getLedRep()==='fixed'){
+      const memo = $('ledMemo').value.trim();
+      await api('recurringSave', TOKEN, {
+        name: memo || $('ledCat').value, amount: moneyVal($('ledAmt')),
+        dom: Number(($('ledDate').value||today()).slice(8)),
+        category: $('ledCat').value, ownerId: $('ledOwner').value, memo: ''
+      });
+      RECURRING = await api('recurringList', TOKEN);
+      closeModal(); toast('고정지출로 등록했습니다');
+      LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM); renderLedger();
+      return;
+    }
     await api('ledgerSave', TOKEN, {
-      id: id||'', kind: window._getLedKind(), amount: moneyVal($('ledAmt')),
+      id: id||'', kind: kind, amount: moneyVal($('ledAmt')),
       date: $('ledDate').value, category: $('ledCat').value,
       ownerId: $('ledOwner').value, memo: $('ledMemo').value.trim()
     });
@@ -832,6 +868,193 @@ async function showAssetHistory(id){
 function exportAssets(){
   csvDownload('자산목록_'+today()+'.csv', [['소유자','구분','종류','이름','금액','메모','수정일'],
     ...ASSETS.map(a=>[memberName(a.ownerId), a.isDebt?'빚':'자산', a.category, a.name, (a.isDebt?-1:1)*a.value, a.memo, a.updatedAt])]);
+}
+
+/* ============================================================
+   카드·할부 — 남은 할부 총액과 "언제 끝나는지" 관리
+   ============================================================ */
+function ymDiff(a,b){ // a월 - b월 (개월 수)
+  const [ay,am]=a.split('-').map(Number), [by,bm]=b.split('-').map(Number);
+  return (ay*12+am)-(by*12+bm);
+}
+/* 할부 1건의 현재 상태 계산 (기준: 이번 달) */
+function instCalc(i, refYm){
+  const idx = ymDiff(refYm||THIS_YM, i.firstYm);      // 이번 달이 몇 회차인지 (0부터)
+  const monthly = Number(i.monthlyAmount) || Math.floor(i.totalAmount/i.months);
+  const paidCnt = Math.min(Math.max(idx+1, 0), i.months);
+  const paidAmt = paidCnt >= i.months ? Number(i.totalAmount) : monthly*paidCnt;
+  const remainAmt = Math.max(Number(i.totalAmount) - paidAmt, 0);
+  const endYm = ymAdd(i.firstYm, i.months-1);
+  return { idx, monthly, paidCnt, paidAmt, remainAmt, endYm, done: idx >= i.months };
+}
+/* 특정 월의 할부 납부액 */
+function instPayAt(i, ym){
+  const idx = ymDiff(ym, i.firstYm);
+  if(idx < 0 || idx >= i.months) return 0;
+  const monthly = Number(i.monthlyAmount) || Math.floor(i.totalAmount/i.months);
+  return idx === i.months-1 ? Number(i.totalAmount) - monthly*(i.months-1) : monthly;
+}
+function renderCards(){
+  const el = $('tab-cards'); if(!el) return;
+  if(!CARDS.length){
+    el.innerHTML = `<div class="empty" style="padding-top:60px">
+      먼저 쓰는 카드를 등록하세요.<br>그 다음 할부 건들을 넣으면<br><b>남은 할부 총액과 언제 끝나는지</b>가 자동 계산됩니다.<br><br>
+      <button class="btn btn-primary" onclick="openCardForm()">＋ 카드 등록</button></div>`;
+    return;
+  }
+  const calcs = INSTS.map(i=>({ i, c: instCalc(i) }));
+  const alive = calcs.filter(x=>!x.c.done);
+  const totalRemain = alive.reduce((s,x)=>s+x.c.remainAmt, 0);
+  const thisPay = INSTS.reduce((s,i)=>s+instPayAt(i, THIS_YM), 0);
+  const lastPay = INSTS.reduce((s,i)=>s+instPayAt(i, ymAdd(THIS_YM,-1)), 0);
+  const maxEnd = alive.length ? alive.map(x=>x.c.endYm).sort().pop() : null;
+
+  // 목표 요약
+  let goalHtml;
+  if(!alive.length){
+    goalHtml = `<div class="lbl">남은 할부</div><div class="big">0원 🎉</div><div class="kor">모든 할부가 끝났습니다!</div>`;
+  }else{
+    const [ey,em] = maxEnd.split('-');
+    const leftM = ymDiff(maxEnd, THIS_YM);
+    goalHtml = `
+      <div class="lbl">남은 할부 총액</div>
+      <div class="big">${fmtWon(totalRemain)}</div>
+      <div class="kor">${fmtKor(totalRemain)}</div>
+      <div class="diff" style="margin-top:12px">🎯 새 할부만 안 만들면 <b>${Number(ey)}년 ${Number(em)}월</b>에 전부 끝 (${leftM}개월 남음)</div>
+      <div class="split">
+        <div><div class="lbl">지난달 납부</div><div class="val">${lastPay?fmtKor(lastPay):'-'}</div></div>
+        <div><div class="lbl">이번 달 납부</div><div class="val">${fmtKor(thisPay)}</div></div>
+      </div>`;
+  }
+
+  // 앞으로 월별 납부액이 줄어드는 그래프 (최대 18개월)
+  let projHtml='';
+  if(alive.length){
+    const end = ymDiff(maxEnd, THIS_YM) > 17 ? ymAdd(THIS_YM, 17) : maxEnd;
+    const months=[]; let ym=THIS_YM;
+    while(ym<=end){ months.push(ym); ym=ymAdd(ym,1); }
+    const vals = months.map(ym=>({ ym, v: INSTS.reduce((s,i)=>s+instPayAt(i,ym),0) }));
+    const max = Math.max(1, ...vals.map(v=>v.v));
+    projHtml = `<div class="card"><h3>앞으로 매달 나갈 할부금 (줄어드는 게 목표)</h3>
+      <div style="display:flex; gap:3px; overflow-x:auto">${vals.map(v=>`
+        <div style="flex:1; min-width:34px; text-align:center">
+          <div style="height:64px; display:flex; align-items:flex-end; justify-content:center">
+            <div style="width:72%; border-radius:4px 4px 0 0; height:${v.v?Math.max(6,Math.round(v.v/max*64)):0}px;
+              background:${v.ym===THIS_YM?'var(--accent)':'#c9d4ea'}"></div>
+          </div>
+          <div style="font-size:.62rem; color:var(--sub); font-weight:700; margin-top:3px">${Number(v.ym.slice(5))}월</div>
+          <div style="font-size:.6rem; color:var(--sub)">${v.v?fmtShort(v.v):''}</div>
+        </div>`).join('')}</div></div>`;
+  }
+
+  // 카드별 목록
+  const cardSections = CARDS.filter(c=>c.active).map(c=>{
+    const list = calcs.filter(x=>x.i.cardId===c.id);
+    const aliveList = list.filter(x=>!x.c.done);
+    const doneCnt = list.length - aliveList.length;
+    const cardRemain = aliveList.reduce((s,x)=>s+x.c.remainAmt,0);
+    const rows = aliveList.map(({i,c:k})=>`
+      <div class="rec-item" onclick='openInstForm(${JSON.stringify(i.id)})'>
+        <span class="nm">${esc(i.name)}${i.ownerId?` <span class="muted">· ${esc(memberName(i.ownerId))}</span>`:''}
+          <div class="rec-sub">${Math.max(k.paidCnt,0)}/${i.months}회 · 월 ${fmt(k.monthly)}원 · <b>${k.endYm.replace('-','.')} 끝</b></div>
+        </span>
+        <span class="amt">남은 ${fmtKor(k.remainAmt)}</span>
+      </div>`).join('');
+    return `<div class="card">
+      <div class="rec-head">
+        <h3>💳 ${esc(c.name)} <span class="muted" style="font-weight:400">· 결제일 ${c.payDom}일${c.limitAmount?' · 한도 '+fmtKor(c.limitAmount):''}</span></h3>
+        <button class="btn btn-ghost btn-sm" onclick='openCardForm(${JSON.stringify(c.id)})'>수정</button>
+      </div>
+      ${rows || '<div class="muted" style="padding:4px 0">진행 중인 할부 없음</div>'}
+      ${doneCnt?`<div class="muted" style="margin-top:6px">완납된 할부 ${doneCnt}건</div>`:''}
+      <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center">
+        <span class="muted">이 카드 남은 할부 <b style="color:var(--txt)">${fmtKor(cardRemain)}</b></span>
+        <button class="btn btn-ghost btn-sm" onclick='openInstForm("", ${JSON.stringify(c.id)})'>＋ 할부 추가</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="networth" style="background:linear-gradient(135deg,#7c2d5a,#a94467)">${goalHtml}</div>
+    ${projHtml}
+    ${cardSections}
+    <div class="row" style="margin-top:16px; justify-content:center">
+      <button class="btn btn-ghost btn-sm" onclick="openCardForm()">＋ 카드 추가</button>
+    </div>
+    <div class="muted" style="text-align:center; margin-top:10px">할부금은 각 카드 결제일에 가계부·달력에 자동 기록됩니다</div>`;
+}
+async function refreshCards(){
+  const cd = await api('cardList', TOKEN);
+  CARDS=cd.cards||[]; INSTS=cd.installments||[];
+  LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM);  // 할부 자동기록 반영
+  renderCards(); renderLedger();
+}
+function openCardForm(id){
+  const it = id ? CARDS.find(c=>c.id===id) : null;
+  openModal(`
+    <h2>${it?'카드 수정':'카드 등록'}</h2>
+    <div class="f-row"><label>카드 이름</label><input id="cdName" placeholder="예: 현대카드, 국민 체크" value="${it?esc(it.name):''}"></div>
+    <div class="f-row"><label>결제일 (매달 며칠)</label><input id="cdDom" type="number" min="1" max="31" value="${it?it.payDom:25}"></div>
+    <div class="f-row"><label>한도 (선택)</label><input id="cdLimit" inputmode="numeric" placeholder="0" value="${it&&it.limitAmount?fmt(it.limitAmount):''}"><div class="kor-hint" id="cdLimitHint">${it&&it.limitAmount?'= '+fmtKor(it.limitAmount):''}</div></div>
+    <div class="m-actions">
+      ${it?'<button class="btn btn-danger" onclick="deleteCard(\''+it.id+'\')">삭제</button>':''}
+      <button class="btn btn-primary" onclick="saveCard('${it?it.id:''}')">저장</button>
+    </div>`);
+  moneyInput($('cdLimit'), $('cdLimitHint'));
+  if(!it) setTimeout(()=>$('cdName').focus(), 50);
+}
+async function saveCard(id){
+  try{
+    await api('cardSave', TOKEN, { id:id||'', name:$('cdName').value.trim(),
+      payDom:Number($('cdDom').value||25), limitAmount:moneyVal($('cdLimit')) });
+    closeModal(); toast('저장했습니다'); await refreshCards();
+  }catch(e){ alert(e.message); reportError('saveCard', e.message); }
+}
+async function deleteCard(id){
+  if(!confirm('이 카드를 삭제할까요?')) return;
+  try{ await api('cardDelete', TOKEN, id); closeModal(); toast('삭제했습니다'); await refreshCards(); }
+  catch(e){ alert(e.message); }
+}
+function openInstForm(id, presetCardId){
+  const it = id ? INSTS.find(i=>i.id===id) : null;
+  const cardOpts = CARDS.filter(c=>c.active).map(c=>
+    `<option value="${c.id}" ${(it?it.cardId===c.id:presetCardId===c.id)?'selected':''}>${esc(c.name)}</option>`).join('');
+  const ownerOpts = MEMBERS.filter(m=>m.active && m.isPerson!==false).map(m=>
+    `<option value="${m.id}" ${it&&it.ownerId===m.id?'selected':''}>${esc(m.displayName)}</option>`).join('');
+  openModal(`
+    <h2>${it?'할부 수정':'할부 등록'}</h2>
+    <div class="f-row"><label>카드</label><select id="inCard">${cardOpts}</select></div>
+    <div class="f-row"><label>뭐 샀는지</label><input id="inName" placeholder="예: 냉장고, 노트북" value="${it?esc(it.name):''}"></div>
+    <div class="f-row"><label>총액</label><input id="inTotal" inputmode="numeric" placeholder="0" value="${it?fmt(it.totalAmount):''}"><div class="kor-hint" id="inTotalHint">${it?'= '+fmtKor(it.totalAmount):''}</div></div>
+    <div class="f-row"><label>할부 개월 수</label><input id="inMonths" type="number" min="1" max="60" value="${it?it.months:12}"><div class="kor-hint" id="inMonthlyHint"></div></div>
+    <div class="f-row"><label>첫 납부 월</label><input id="inFirst" type="month" value="${it?it.firstYm:THIS_YM}"></div>
+    <div class="f-row"><label>누구 (선택)</label><select id="inOwner"><option value="">공동/무관</option>${ownerOpts}</select></div>
+    <div class="m-actions">
+      ${it?'<button class="btn btn-danger" onclick="deleteInst(\''+it.id+'\')">삭제</button>':''}
+      <button class="btn btn-primary" onclick="saveInst('${it?it.id:''}')">저장</button>
+    </div>`);
+  moneyInput($('inTotal'), $('inTotalHint'));
+  const updMonthly = ()=>{
+    const t = moneyVal($('inTotal')), n = Number($('inMonths').value||1);
+    $('inMonthlyHint').textContent = (t>0&&n>0) ? '→ 월 약 '+fmt(Math.floor(t/n))+'원씩' : '';
+  };
+  $('inTotal').addEventListener('input', updMonthly);
+  $('inMonths').addEventListener('input', updMonthly);
+  updMonthly();
+  if(!it) setTimeout(()=>$('inName').focus(), 50);
+}
+async function saveInst(id){
+  try{
+    await api('instSave', TOKEN, { id:id||'', cardId:$('inCard').value, name:$('inName').value.trim(),
+      totalAmount:moneyVal($('inTotal')), months:Number($('inMonths').value||1),
+      monthlyAmount:0, firstYm:$('inFirst').value, ownerId:$('inOwner').value });
+    closeModal(); toast('저장했습니다'); await refreshCards();
+  }catch(e){ alert(e.message); reportError('saveInst', e.message); }
+}
+async function deleteInst(id){
+  if(!confirm('이 할부를 삭제할까요?\n(이미 기록된 납부 내역은 남습니다)')) return;
+  try{ await api('instDelete', TOKEN, id); closeModal(); toast('삭제했습니다'); await refreshCards(); }
+  catch(e){ alert(e.message); }
 }
 
 /* ============================================================
