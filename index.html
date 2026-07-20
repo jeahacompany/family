@@ -92,6 +92,22 @@ header{background:var(--navy); color:#fff; padding:14px 0 0; position:sticky; to
 .led-item .cat{font-size:.72rem; background:#eef1f7; color:var(--navy); border-radius:6px; padding:3px 7px; font-weight:700; white-space:nowrap}
 .led-item .mm{flex:1; font-size:.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .led-item .amt{font-weight:800; font-size:.95rem; white-space:nowrap}
+/* 지출 달력 */
+.cal-card{padding:12px 6px 8px}
+.cal-week,.cal-grid{display:grid; grid-template-columns:repeat(7,1fr)}
+.cal-week div{text-align:center; font-size:.72rem; color:var(--sub); padding:2px 0 6px; font-weight:700}
+.cal-week div:first-child{color:var(--red)}
+.cal-cell{min-height:54px; border-radius:8px; padding:3px 1px; cursor:pointer; text-align:center; overflow:hidden}
+.cal-cell.empty{cursor:default}
+.cal-cell .d{font-size:.78rem; font-weight:700; color:var(--txt)}
+.cal-cell.sun .d{color:var(--red)}
+.cal-cell.today{background:#e8f1ff}
+.cal-cell.today .d{color:var(--accent)}
+.cal-cell .ce{font-size:.64rem; color:var(--red); font-weight:800; line-height:1.3}
+.cal-cell .ci{font-size:.64rem; color:var(--blue); font-weight:800; line-height:1.3}
+.cal-cell .cp{font-size:.6rem; color:#e8871e; font-weight:800; line-height:1.3}
+.cal-legend{display:flex; gap:12px; justify-content:center; margin-top:6px; font-size:.68rem; color:var(--sub)}
+.cal-legend b.e{color:var(--red)} .cal-legend b.i{color:var(--blue)} .cal-legend b.p{color:#e8871e}
 /* 고정지출 체크리스트 */
 .rec-item{display:flex; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid var(--line); cursor:pointer}
 .rec-item:last-child{border-bottom:none}
@@ -214,8 +230,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 const CHANGELOG = [
+  ['v1.3.0', '2026-07-20', '지출 달력 추가 — 날짜별 지출/수입과 "나갈 예정" 고정지출이 달력에 표시, 날짜 눌러서 바로 기록'],
   ['v1.2.0', '2026-07-20', '고정지출(매달 반복) 기능 — 등록해두면 매달 체크리스트로 뜸. 지출 탭을 첫 화면으로, 분류별 지출 그래프 추가'],
   ['v1.1.0', '2026-07-20', '가족 공용 아이디 1개로 로그인하도록 변경, 구성원 실제 이름 반영 (박지호·박소연·박현주·정시헌)'],
   ['v1.0.0', '2026-07-20', '첫 출시 — 재산현황·가계부·자산 관리, 월별 스냅샷, 엑셀 내보내기'],
@@ -437,6 +454,7 @@ function renderLedger(){
     <div class="month-nav">
       <button onclick="moveMonth(-1)">◀</button><b>${curYM.replace('-','년 ')}월</b><button onclick="moveMonth(1)">▶</button>
     </div>
+    ${renderCalendar(rows)}
     <div class="led-sum">
       <div><div class="l">수입</div><div class="v" style="color:var(--blue)">+${fmt(inc)}원</div></div>
       <div><div class="l">지출</div><div class="v" style="color:var(--red)">-${fmt(exp)}원</div></div>
@@ -450,6 +468,89 @@ function renderLedger(){
       <button class="btn btn-ghost btn-sm" onclick="exportLedgerYear()">${curYM.slice(0,4)}년 전체 엑셀</button>
     </div>`;
 }
+/* ---------- 지출 달력 ---------- */
+/* 금액 축약 표기: 55000 → 5.5만 */
+function fmtShort(n){
+  n = Math.round(n||0);
+  if(n >= 100000000) return (Math.round(n/10000000)/10)+'억';
+  if(n >= 10000) return (Math.round(n/1000)/10)+'만';
+  return fmt(n);
+}
+/* 이번 달 달력: 날짜별 지출/수입 + 아직 안 나간 고정지출 예정 표시 */
+function renderCalendar(rows){
+  const [y,m] = curYM.split('-').map(Number);
+  const startDow = new Date(y, m-1, 1).getDay();
+  const dim = new Date(y, m, 0).getDate();
+  const todayStr = today();
+  const expD={}, incD={};
+  rows.forEach(r=>{
+    const d = Number(r.date.slice(8));
+    if(r.kind==='expense') expD[d]=(expD[d]||0)+Number(r.amount);
+    else incD[d]=(incD[d]||0)+Number(r.amount);
+  });
+  // 아직 체크 안 된 고정지출 → 해당 날짜에 "예정"으로 표시
+  const doneIds = new Set(rows.filter(x=>x.recurringId).map(x=>x.recurringId));
+  const pendD={};
+  RECURRING.filter(r=>r.active && !doneIds.has(r.id)).forEach(r=>{
+    const d = Math.min(r.dom, dim);
+    pendD[d]=(pendD[d]||0)+Number(r.amount);
+  });
+  let cells='';
+  for(let i=0;i<startDow;i++) cells += '<div class="cal-cell empty"></div>';
+  for(let d=1;d<=dim;d++){
+    const ds = curYM+'-'+String(d).padStart(2,'0');
+    const dow = (startDow+d-1)%7;
+    cells += `<div class="cal-cell ${dow===0?'sun':''} ${ds===todayStr?'today':''}" onclick='openDayModal("${ds}")'>
+      <div class="d">${d}</div>
+      ${incD[d]?`<div class="ci">+${fmtShort(incD[d])}</div>`:''}
+      ${expD[d]?`<div class="ce">-${fmtShort(expD[d])}</div>`:''}
+      ${pendD[d]?`<div class="cp">${fmtShort(pendD[d])}예정</div>`:''}
+    </div>`;
+  }
+  return `<div class="card cal-card">
+    <div class="cal-week"><div>일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div>토</div></div>
+    <div class="cal-grid">${cells}</div>
+    <div class="cal-legend"><span><b class="e">-지출</b></span><span><b class="i">+수입</b></span><span><b class="p">예정</b> = 나갈 고정지출</span></div>
+  </div>`;
+}
+/* 날짜 클릭 → 그 날 내역 + 예정 고정지출 + 기록 추가 */
+function openDayModal(ds){
+  const rows = (LEDGER[curYM]||[]).filter(r=>r.date===ds);
+  const [y,m] = curYM.split('-').map(Number);
+  const dim = new Date(y, m, 0).getDate();
+  const d = Number(ds.slice(8));
+  const doneIds = new Set((LEDGER[curYM]||[]).filter(x=>x.recurringId).map(x=>x.recurringId));
+  const pend = RECURRING.filter(r=>r.active && !doneIds.has(r.id) && Math.min(r.dom,dim)===d);
+  const wd = ['일','월','화','수','목','금','토'][new Date(ds).getDay()];
+  const entryHtml = rows.map(r=>`
+    <div class="led-item" onclick='openLedgerForm(${JSON.stringify(r.id)})'>
+      <span class="cat">${esc(r.category)}</span>
+      <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}</span>
+      <span class="amt ${r.kind}">${r.kind==='income'?'+':'-'}${fmt(r.amount)}원</span>
+    </div>`).join('');
+  const pendHtml = pend.map(r=>`
+    <div class="led-item">
+      <span class="cat" style="background:#fdf1e3;color:#e8871e">예정</span>
+      <span class="mm">${esc(r.name)}</span>
+      <span class="amt">-${fmt(r.amount)}원</span>
+      <button class="btn btn-primary btn-sm" onclick='dayCheckRecurring(${JSON.stringify(r.id)}, "${ds}")'>나감 체크</button>
+    </div>`).join('');
+  openModal(`<h2>${m}월 ${d}일 (${wd})</h2>
+    ${entryHtml}${pendHtml}
+    ${!entryHtml && !pendHtml ? '<div class="empty" style="padding:20px 0">이 날 내역이 없습니다</div>' : ''}
+    <div class="m-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">닫기</button>
+      <button class="btn btn-primary" onclick='openLedgerForm("", "${ds}")'>＋ 이 날 기록</button>
+    </div>`);
+}
+async function dayCheckRecurring(id, ds){
+  try{
+    await api('recurringCheck', TOKEN, id, curYM, true);
+    LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM);
+    renderLedger(); openDayModal(ds);
+  }catch(e){ alert(e.message); }
+}
+
 /* ---------- 고정지출 (매달 반복) ---------- */
 /* 이번 달에 체크됐는지 = 이 달 가계부에 연결(recurringId) 내역이 있는지 */
 function recurringCard(rows){
@@ -556,7 +657,7 @@ function monthCatBars(rows){
 }
 
 /* 가계부 입력/수정 폼 */
-function openLedgerForm(id){
+function openLedgerForm(id, presetDate){
   const it = id ? (LEDGER[curYM]||[]).find(r=>r.id===id) : null;
   const kind = it ? it.kind : 'expense';
   const ownerOpts = MEMBERS.filter(m=>m.active && m.isPerson!==false).map(m=>`<option value="${m.id}" ${it&&it.ownerId===m.id?'selected':''}>${esc(m.displayName)}</option>`).join('');
@@ -567,7 +668,7 @@ function openLedgerForm(id){
       <button type="button" class="inc ${kind==='income'?'on':''}" data-k="income">수입</button>
     </div></div>
     <div class="f-row"><label>금액</label><input id="ledAmt" inputmode="numeric" placeholder="0" value="${it?fmt(it.amount):''}"><div class="kor-hint" id="ledAmtHint">${it?'= '+fmtKor(it.amount):''}</div></div>
-    <div class="f-row"><label>날짜</label><input id="ledDate" type="date" value="${it?it.date:today()}"></div>
+    <div class="f-row"><label>날짜</label><input id="ledDate" type="date" value="${it?it.date:(presetDate||today())}"></div>
     <div class="f-row"><label>분류</label><select id="ledCat"></select></div>
     <div class="f-row"><label>누구 (선택)</label><select id="ledOwner"><option value="">공동/무관</option>${ownerOpts}</select></div>
     <div class="f-row"><label>메모</label><input id="ledMemo" placeholder="예: 이마트 장보기" value="${it?esc(it.memo):''}"></div>
