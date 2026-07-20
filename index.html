@@ -238,8 +238,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.9.0';
+const VERSION = 'v1.9.1';
 const CHANGELOG = [
+  ['v1.9.1', '2026-07-20', '대여금 상환도 "매달 고정지출" 목록·총액에 포함 (기간 끝날 때까지 고정이니까)'],
   ['v1.9.0', '2026-07-20', '보증금 탭 신설 — 렌트·집 보증금 등록, 묶여있는 돈 합계와 돌려받는 시기 관리. 재산으로 자동 분류'],
   ['v1.8.0', '2026-07-20', '대여금 탭 신설 — 개인 간 빌린 돈/빌려준 돈, 매달 상환이 가계부에 자동 기록, 남은 금액·언제 끝나는지 자동 계산'],
   ['v1.7.0', '2026-07-20', '고정지출에 기간 개념 — 처음 납부 월·총 개월 수 입력하면 지금까지 몇 회/얼마 냈고 언제 끝나는지 자동 계산 (렌트·대출·적금용). 끝난 뒤엔 자동 기록도 멈춤'],
@@ -556,27 +557,46 @@ function openDayModal(ds){
 /* 이번 달에 체크됐는지 = 이 달 가계부에 연결(recurringId) 내역이 있는지 */
 function recurringCard(rows){
   const items = RECURRING.filter(r=>r.active).sort((a,b)=>a.dom-b.dom);
-  if(!items.length){
+  // 대여금(빌린 돈)도 기간이 끝나기 전까진 고정지출 — 이 달 상환분이 있으면 같이 표시
+  const loanItems = (typeof LOANS!=='undefined'?LOANS:[]).filter(l=>l.direction!=='lent' && instPayAt(l, curYM)>0);
+  if(!items.length && !loanItems.length){
     return `<div class="card"><div class="rec-head"><h3>매달 고정지출</h3>
       <button class="btn btn-ghost btn-sm" onclick="openRecurringForm()">＋ 등록</button></div>
       <div class="muted" style="padding:6px 0">통신비·보험·적금·대출처럼 매달 나가는 돈을 등록해두면<br>매달 자동으로 가계부에 기록되고 달력에 표시됩니다.</div></div>`;
   }
   const linked = new Set(rows.filter(x=>x.recurringId).map(x=>x.recurringId));
-  const total = items.reduce((s,r)=>s+Number(r.amount),0);
-  const list = items.map(r=>{
-    const out = linked.has(r.id);   // 이 달 가계부에 들어가 있는지 (삭제로 뺐으면 false)
-    const p = recurPeriod(r);
-    const sub = p
-      ? `${p.startTxt} 시작 · <b>${p.cnt}${r.totalMonths?'/'+r.totalMonths:''}회</b> 납부 · 누적 ${fmtKor(p.paidAmt)}${p.endYm?` · <b style="color:var(--accent)">${p.endYm.replace('-','.')} 끝</b>`:''}`
-      : `누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}`;
-    return `<div class="rec-item" onclick='openRecurringForm(${JSON.stringify(r.id)})'>
-      <span class="dd">${r.dom}일</span>
-      <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}
-        <div class="rec-sub">${sub}${out?'':' · <b style="color:#e8871e">이번 달 뺌</b>'}</div>
-      </span>
-      <span class="amt">${fmt(r.amount)}원</span>
-      ${out?'':`<button class="btn btn-ghost btn-sm" onclick='event.stopPropagation();toggleRecurring(${JSON.stringify(r.id)},true)'>넣기</button>`}
-    </div>`;
+  const total = items.reduce((s,r)=>s+Number(r.amount),0)
+              + loanItems.reduce((s,l)=>s+instPayAt(l, curYM),0);
+  const merged = [
+    ...items.map(r=>({ dom:r.dom, kind:'rec', r })),
+    ...loanItems.map(l=>({ dom:l.payDom, kind:'loan', l }))
+  ].sort((a,b)=>a.dom-b.dom);
+  const list = merged.map(m=>{
+    if(m.kind==='rec'){
+      const r = m.r;
+      const out = linked.has(r.id);   // 이 달 가계부에 들어가 있는지 (삭제로 뺐으면 false)
+      const p = recurPeriod(r);
+      const sub = p
+        ? `${p.startTxt} 시작 · <b>${p.cnt}${r.totalMonths?'/'+r.totalMonths:''}회</b> 납부 · 누적 ${fmtKor(p.paidAmt)}${p.endYm?` · <b style="color:var(--accent)">${p.endYm.replace('-','.')} 끝</b>`:''}`
+        : `누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}`;
+      return `<div class="rec-item" onclick='openRecurringForm(${JSON.stringify(r.id)})'>
+        <span class="dd">${r.dom}일</span>
+        <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}
+          <div class="rec-sub">${sub}${out?'':' · <b style="color:#e8871e">이번 달 뺌</b>'}</div>
+        </span>
+        <span class="amt">${fmt(r.amount)}원</span>
+        ${out?'':`<button class="btn btn-ghost btn-sm" onclick='event.stopPropagation();toggleRecurring(${JSON.stringify(r.id)},true)'>넣기</button>`}
+      </div>`;
+    }else{
+      const l = m.l, k = instCalc(l);
+      return `<div class="rec-item" onclick='openLoanForm(${JSON.stringify(l.id)})'>
+        <span class="dd">${l.payDom}일</span>
+        <span class="nm">${esc(l.counterparty)} 상환 <span class="cat" style="background:#e3edf6;color:#2d5a7c">대여금</span>
+          <div class="rec-sub">${Math.max(k.paidCnt,0)}/${l.months}회 · 남은 ${fmtKor(k.remainAmt)} · <b style="color:var(--accent)">${k.endYm.replace('-','.')} 끝</b></div>
+        </span>
+        <span class="amt">${fmt(instPayAt(l, curYM))}원</span>
+      </div>`;
+    }
   }).join('');
   return `<div class="card">
     <div class="rec-head"><h3>매달 고정지출 · 총 ${fmt(total)}원 (자동 기록)</h3>
