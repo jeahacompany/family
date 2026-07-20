@@ -240,8 +240,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v2.4.0';
+const VERSION = 'v2.4.1';
 const CHANGELOG = [
+  ['v2.4.1', '2026-07-20', '카드값 기간 버튼 변경 — 이번달·3개월·6개월·올해·작년. 이번달 누르면 오늘 기준 달로 복귀'],
   ['v2.4.0', '2026-07-20', '월별 카드값 화면 재설계 — 일시불/할부 색 구분 누적 그래프, 전달 대비 자동 분석(뭐가 늘었는지), 3개월·6개월·1년 보기 전환'],
   ['v2.3.0', '2026-07-20', '월별 카드값 개선 — ◀▶ 월 이동으로 과거 달 입력, 일시불/할부 나눠서 기록, 가계부 연동 유지'],
   ['v2.2.0', '2026-07-20', '카드값이 가계부 지출에 자동 반영 — 적은 달 결제일에 [카드] 내역 생성, 할부 등록분은 자동 차감(이중계산 방지)'],
@@ -275,7 +276,7 @@ const INC_CATS = ['급여','사업소득','용돈','이자·배당','기타'];
 
 /* ---------- 상태 ---------- */
 let TOKEN = localStorage.getItem('fam_token') || '';
-let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], BILLS=[], LOANS=[], THIS_YM='', BILL_YM='', BILL_RANGE=6;
+let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], CARDS=[], INSTS=[], BILLS=[], LOANS=[], THIS_YM='', BILL_YM='', BILL_RANGE='this';
 let LEDGER={};          // { 'YYYY-MM': [entries] }
 let curTab='ledger', curYM='';
 
@@ -1170,14 +1171,21 @@ function renderCards(){
     </div>`;
   }
 
-  // ── 기간 전환(3·6·12개월) 누적 막대그래프: 파랑=일시불, 주황=할부 ──
-  const bMonths=[]; for(let k=BILL_RANGE-1;k>=0;k--) bMonths.push(ymAdd(BILL_YM,-k));
+  // ── 기간 전환(이번달·3개월·6개월·올해·작년) 누적 막대그래프: 파랑=일시불, 주황=할부 ──
+  const bMonths=[];
+  if(BILL_RANGE==='year' || BILL_RANGE==='lastyear'){
+    const y = Number(THIS_YM.slice(0,4)) - (BILL_RANGE==='lastyear' ? 1 : 0);
+    for(let m=1; m<=12; m++) bMonths.push(y+'-'+String(m).padStart(2,'0'));
+  }else{
+    const n = BILL_RANGE==='this' ? 6 : Number(BILL_RANGE);
+    for(let k=n-1; k>=0; k--) bMonths.push(ymAdd(BILL_YM, -k));
+  }
   const bVals = bMonths.map(ym=>({ ym, a: monthAgg(ym) }));
   let billChart='';
   if(bVals.some(v=>v.a)){
     const bMax = Math.max(...bVals.map(v=>v.a?v.a.t:0), 1);
     const H=84;
-    billChart = `<div style="overflow-x:auto"><div style="display:flex; gap:3px; margin-top:12px; min-width:${BILL_RANGE>6?'520px':'0'}">
+    billChart = `<div style="overflow-x:auto"><div style="display:flex; gap:3px; margin-top:12px; min-width:${bMonths.length>6?'520px':'0'}">
       ${bVals.map(v=>{
         const t=v.a?v.a.t:0, i=v.a?v.a.i:0;
         const hT = t?Math.max(8,Math.round(t/bMax*H)):0;
@@ -1202,7 +1210,8 @@ function renderCards(){
     </div>`;
   }
   const rangeSeg = `<div class="seg" style="margin-top:12px">
-    ${[3,6,12].map(n=>`<button type="button" class="plain ${BILL_RANGE===n?'on':''}" onclick="setBillRange(${n})">${n===12?'1년':n+'개월'}</button>`).join('')}
+    ${[['this','이번달'],['3','3개월'],['6','6개월'],['year','올해'],['lastyear','작년']].map(([k,label])=>
+      `<button type="button" class="plain ${String(BILL_RANGE)===k?'on':''}" onclick="setBillRange('${k}')">${label}</button>`).join('')}
   </div>`;
 
   // ── 카드별 이번 달 입력 현황 ──
@@ -1258,7 +1267,13 @@ async function refreshCards(){
 }
 /* 월별 카드값 — 월 이동 / 기간 전환 */
 function moveBillMonth(n){ BILL_YM = ymAdd(BILL_YM, n); renderCards(); }
-function setBillRange(n){ BILL_RANGE = n; renderCards(); }
+function setBillRange(k){
+  BILL_RANGE = k;
+  if(k==='this') BILL_YM = THIS_YM;                                     // 오늘 기준 달로 복귀
+  if(k==='lastyear') BILL_YM = (Number(THIS_YM.slice(0,4))-1)+'-12';    // 작년 12월 기준
+  if(k==='year' && BILL_YM.slice(0,4)!==THIS_YM.slice(0,4)) BILL_YM = THIS_YM;
+  renderCards();
+}
 /* 월별 카드값 입력 (일시불/할부 분리) */
 function openBillForm(cardId){
   const c = CARDS.find(x=>x.id===cardId);
