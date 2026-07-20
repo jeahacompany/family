@@ -118,6 +118,7 @@ header{background:var(--navy); color:#fff; padding:14px 0 0; position:sticky; to
 .rec-item.done .nm{color:var(--sub); text-decoration:line-through}
 .rec-item .amt{font-weight:800; font-size:.92rem; white-space:nowrap}
 .rec-item.done .amt{color:var(--sub)}
+.rec-sub{font-size:.72rem; color:var(--sub); font-weight:400; margin-top:2px}
 .rec-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:6px}
 .rec-head h3{margin-bottom:0}
 .amt.expense{color:var(--txt)} .amt.income{color:var(--blue)}
@@ -231,8 +232,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.4.0';
+const VERSION = 'v1.5.0';
 const CHANGELOG = [
+  ['v1.5.0', '2026-07-20', '고정지출 완전 자동 기록(체크 불필요), 지난달 대비 비교 + 월별 지출 흐름 그래프, 고정지출별 누적 납부 횟수·총액 표시'],
   ['v1.4.0', '2026-07-20', '지출 전용 화면으로 단순화 — 재산현황·자산 탭 숨김 (데이터는 그대로, 나중에 다시 켤 수 있음)'],
   ['v1.3.0', '2026-07-20', '지출 달력 추가 — 날짜별 지출/수입과 "나갈 예정" 고정지출이 달력에 표시, 날짜 눌러서 바로 기록'],
   ['v1.2.0', '2026-07-20', '고정지출(매달 반복) 기능 — 등록해두면 매달 체크리스트로 뜸. 지출 탭을 첫 화면으로, 분류별 지출 그래프 추가'],
@@ -249,7 +251,7 @@ const INC_CATS = ['급여','사업소득','용돈','이자·배당','기타'];
 
 /* ---------- 상태 ---------- */
 let TOKEN = localStorage.getItem('fam_token') || '';
-let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], THIS_YM='';
+let ME=null, MEMBERS=[], ASSETS=[], TOTALS=null, SNAPSHOTS=[], RECURRING=[], MONTHLY=[], THIS_YM='';
 let LEDGER={};          // { 'YYYY-MM': [entries] }
 let curTab='ledger', curYM='';
 
@@ -315,7 +317,7 @@ function csvDownload(filename, rows){
 /* ---------- 로그인/부팅 ---------- */
 function showLogin(){ $('appView').style.display='none'; $('loginView').style.display='flex'; }
 function applyBoot(r){
-  ME=r.me; MEMBERS=r.members; ASSETS=r.assets; TOTALS=r.totals; SNAPSHOTS=r.snapshots; RECURRING=r.recurring||[];
+  ME=r.me; MEMBERS=r.members; ASSETS=r.assets; TOTALS=r.totals; SNAPSHOTS=r.snapshots; RECURRING=r.recurring||[]; MONTHLY=r.monthly||[];
   THIS_YM=r.thisMonth; curYM = curYM || r.thisMonth; LEDGER[r.thisMonth]=r.ledger;
   $('whoami').textContent = ' · '+ME.displayName;
   $('verTxt').textContent = VERSION;
@@ -462,6 +464,7 @@ function renderLedger(){
       <div><div class="l">지출</div><div class="v" style="color:var(--red)">-${fmt(exp)}원</div></div>
       <div><div class="l">수지</div><div class="v" style="color:${inc-exp>=0?'var(--green)':'var(--red)'}">${inc-exp>=0?'+':''}${fmt(inc-exp)}원</div></div>
     </div>
+    ${monthlyCard(rows)}
     ${recurringCard(rows)}
     ${monthCatBars(rows)}
     ${listHtml || '<div class="empty">이번 달 내역이 없습니다.<br>오른쪽 아래 ＋ 버튼으로 기록해보세요!</div>'}
@@ -490,13 +493,6 @@ function renderCalendar(rows){
     if(r.kind==='expense') expD[d]=(expD[d]||0)+Number(r.amount);
     else incD[d]=(incD[d]||0)+Number(r.amount);
   });
-  // 아직 체크 안 된 고정지출 → 해당 날짜에 "예정"으로 표시
-  const doneIds = new Set(rows.filter(x=>x.recurringId).map(x=>x.recurringId));
-  const pendD={};
-  RECURRING.filter(r=>r.active && !doneIds.has(r.id)).forEach(r=>{
-    const d = Math.min(r.dom, dim);
-    pendD[d]=(pendD[d]||0)+Number(r.amount);
-  });
   let cells='';
   for(let i=0;i<startDow;i++) cells += '<div class="cal-cell empty"></div>';
   for(let d=1;d<=dim;d++){
@@ -506,51 +502,32 @@ function renderCalendar(rows){
       <div class="d">${d}</div>
       ${incD[d]?`<div class="ci">+${fmtShort(incD[d])}</div>`:''}
       ${expD[d]?`<div class="ce">-${fmtShort(expD[d])}</div>`:''}
-      ${pendD[d]?`<div class="cp">${fmtShort(pendD[d])}예정</div>`:''}
     </div>`;
   }
   return `<div class="card cal-card">
     <div class="cal-week"><div>일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div>토</div></div>
     <div class="cal-grid">${cells}</div>
-    <div class="cal-legend"><span><b class="e">-지출</b></span><span><b class="i">+수입</b></span><span><b class="p">예정</b> = 나갈 고정지출</span></div>
+    <div class="cal-legend"><span><b class="e">-지출</b></span><span><b class="i">+수입</b></span><span>날짜를 누르면 내역·기록</span></div>
   </div>`;
 }
 /* 날짜 클릭 → 그 날 내역 + 예정 고정지출 + 기록 추가 */
 function openDayModal(ds){
   const rows = (LEDGER[curYM]||[]).filter(r=>r.date===ds);
   const [y,m] = curYM.split('-').map(Number);
-  const dim = new Date(y, m, 0).getDate();
   const d = Number(ds.slice(8));
-  const doneIds = new Set((LEDGER[curYM]||[]).filter(x=>x.recurringId).map(x=>x.recurringId));
-  const pend = RECURRING.filter(r=>r.active && !doneIds.has(r.id) && Math.min(r.dom,dim)===d);
   const wd = ['일','월','화','수','목','금','토'][new Date(ds).getDay()];
   const entryHtml = rows.map(r=>`
     <div class="led-item" onclick='openLedgerForm(${JSON.stringify(r.id)})'>
       <span class="cat">${esc(r.category)}</span>
-      <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}</span>
+      <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}${r.recurringId?' <span class="muted">· 고정</span>':''}</span>
       <span class="amt ${r.kind}">${r.kind==='income'?'+':'-'}${fmt(r.amount)}원</span>
     </div>`).join('');
-  const pendHtml = pend.map(r=>`
-    <div class="led-item">
-      <span class="cat" style="background:#fdf1e3;color:#e8871e">예정</span>
-      <span class="mm">${esc(r.name)}</span>
-      <span class="amt">-${fmt(r.amount)}원</span>
-      <button class="btn btn-primary btn-sm" onclick='dayCheckRecurring(${JSON.stringify(r.id)}, "${ds}")'>나감 체크</button>
-    </div>`).join('');
   openModal(`<h2>${m}월 ${d}일 (${wd})</h2>
-    ${entryHtml}${pendHtml}
-    ${!entryHtml && !pendHtml ? '<div class="empty" style="padding:20px 0">이 날 내역이 없습니다</div>' : ''}
+    ${entryHtml || '<div class="empty" style="padding:20px 0">이 날 내역이 없습니다</div>'}
     <div class="m-actions">
       <button class="btn btn-ghost" onclick="closeModal()">닫기</button>
       <button class="btn btn-primary" onclick='openLedgerForm("", "${ds}")'>＋ 이 날 기록</button>
     </div>`);
-}
-async function dayCheckRecurring(id, ds){
-  try{
-    await api('recurringCheck', TOKEN, id, curYM, true);
-    LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM);
-    renderLedger(); openDayModal(ds);
-  }catch(e){ alert(e.message); }
 }
 
 /* ---------- 고정지출 (매달 반복) ---------- */
@@ -560,25 +537,26 @@ function recurringCard(rows){
   if(!items.length){
     return `<div class="card"><div class="rec-head"><h3>매달 고정지출</h3>
       <button class="btn btn-ghost btn-sm" onclick="openRecurringForm()">＋ 등록</button></div>
-      <div class="muted" style="padding:6px 0">통신비·보험·구독료처럼 매달 나가는 돈을 등록해두면<br>매달 여기에 체크리스트로 떠서 관리가 됩니다.</div></div>`;
+      <div class="muted" style="padding:6px 0">통신비·보험·적금·대출처럼 매달 나가는 돈을 등록해두면<br>매달 자동으로 가계부에 기록되고 달력에 표시됩니다.</div></div>`;
   }
-  const doneIds = new Set(rows.filter(x=>x.recurringId).map(x=>x.recurringId));
+  const linked = new Set(rows.filter(x=>x.recurringId).map(x=>x.recurringId));
   const total = items.reduce((s,r)=>s+Number(r.amount),0);
-  const doneSum = items.filter(r=>doneIds.has(r.id)).reduce((s,r)=>s+Number(r.amount),0);
   const list = items.map(r=>{
-    const done = doneIds.has(r.id);
-    return `<div class="rec-item ${done?'done':''}" onclick='toggleRecurring(${JSON.stringify(r.id)}, ${!done})'>
-      <span class="chk">${done?'✓':''}</span>
+    const out = linked.has(r.id);   // 이 달 가계부에 들어가 있는지 (삭제로 뺐으면 false)
+    return `<div class="rec-item" onclick='openRecurringForm(${JSON.stringify(r.id)})'>
       <span class="dd">${r.dom}일</span>
-      <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}</span>
+      <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}
+        <div class="rec-sub">누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}${out?'':' · <b style="color:#e8871e">이번 달 뺌</b>'}</div>
+      </span>
       <span class="amt">${fmt(r.amount)}원</span>
+      ${out?'':`<button class="btn btn-ghost btn-sm" onclick='event.stopPropagation();toggleRecurring(${JSON.stringify(r.id)},true)'>넣기</button>`}
     </div>`;
   }).join('');
   return `<div class="card">
-    <div class="rec-head"><h3>매달 고정지출 · 총 ${fmt(total)}원 (나감 ${fmt(doneSum)}원)</h3>
+    <div class="rec-head"><h3>매달 고정지출 · 총 ${fmt(total)}원 (자동 기록)</h3>
       <button class="btn btn-ghost btn-sm" onclick="openRecurringManage()">관리</button></div>
     ${list}
-    <div class="muted" style="margin-top:8px">눌러서 나감 체크 → 이 달 가계부에 자동 기록됩니다</div>
+    <div class="muted" style="margin-top:8px">매달 자동으로 가계부에 들어갑니다. 안 나간 달은 그 달 내역에서 삭제하면 됩니다</div>
   </div>`;
 }
 async function toggleRecurring(id, checked){
@@ -587,6 +565,40 @@ async function toggleRecurring(id, checked){
     LEDGER[curYM] = await api('ledgerMonth', TOKEN, curYM);
     renderLedger();
   }catch(e){ alert(e.message); reportError('toggleRecurring', e.message); }
+}
+/* 월별 지출 비교 (지난달 대비 + 최근 6개월 흐름) */
+function monthlyCard(rows){
+  const map = {};
+  (MONTHLY||[]).forEach(m=>{ map[m.ym] = { inc:Number(m.income), exp:Number(m.expense) }; });
+  // 보고 있는 달은 방금 불러온 내역으로 최신값 계산
+  const liveExp = rows.filter(r=>r.kind==='expense').reduce((s,r)=>s+Number(r.amount),0);
+  const liveInc = rows.filter(r=>r.kind==='income').reduce((s,r)=>s+Number(r.amount),0);
+  map[curYM] = { inc:liveInc, exp:liveExp };
+  const months=[]; for(let i=5;i>=0;i--) months.push(ymAdd(curYM,-i));
+  const vals = months.map(ym=>({ ym, exp:(map[ym]?map[ym].exp:0) }));
+  const prev = map[ymAdd(curYM,-1)];
+  let diffTxt='';
+  if(prev && prev.exp>0){
+    const d = liveExp - prev.exp;
+    diffTxt = `지난달 지출 <b>${fmtKor(prev.exp)}</b> → 이번 달 <b>${fmtKor(liveExp)}</b>
+      <b style="color:${d>0?'var(--red)':'var(--green)'}">(${d>0?'▲':'▼'} ${fmtKor(Math.abs(d))})</b>`;
+  }else{
+    diffTxt = `이번 달 지출 <b>${fmtKor(liveExp)}</b> <span class="muted">(다음 달부터 지난달 비교가 됩니다)</span>`;
+  }
+  const max = Math.max(1, ...vals.map(v=>v.exp));
+  const bars = vals.map(v=>`
+    <div style="flex:1; text-align:center">
+      <div style="height:64px; display:flex; align-items:flex-end; justify-content:center">
+        <div style="width:70%; border-radius:5px 5px 0 0; height:${Math.max(v.exp>0?6:0, Math.round(v.exp/max*64))}px;
+          background:${v.ym===curYM?'var(--accent)':'#c9d4ea'}"></div>
+      </div>
+      <div style="font-size:.66rem; color:${v.ym===curYM?'var(--accent)':'var(--sub)'}; font-weight:700; margin-top:3px">${Number(v.ym.slice(5))}월</div>
+      <div style="font-size:.62rem; color:var(--sub)">${v.exp?fmtShort(v.exp):''}</div>
+    </div>`).join('');
+  return `<div class="card"><h3>월별 지출 흐름</h3>
+    <div style="font-size:.9rem; margin-bottom:10px">${diffTxt}</div>
+    <div style="display:flex; gap:4px">${bars}</div>
+  </div>`;
 }
 function openRecurringManage(){
   const items = RECURRING.slice().sort((a,b)=>a.dom-b.dom);
