@@ -232,8 +232,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.5.0';
+const VERSION = 'v1.5.1';
 const CHANGELOG = [
+  ['v1.5.1', '2026-07-20', '내역마다 고정지출 여부 표시 — 목록에 초록 "고정" 라벨, 수정 화면에 고정지출 안내·설정 바로가기'],
   ['v1.5.0', '2026-07-20', '고정지출 완전 자동 기록(체크 불필요), 지난달 대비 비교 + 월별 지출 흐름 그래프, 고정지출별 누적 납부 횟수·총액 표시'],
   ['v1.4.0', '2026-07-20', '지출 전용 화면으로 단순화 — 재산현황·자산 탭 숨김 (데이터는 그대로, 나중에 다시 켤 수 있음)'],
   ['v1.3.0', '2026-07-20', '지출 달력 추가 — 날짜별 지출/수입과 "나갈 예정" 고정지출이 달력에 표시, 날짜 눌러서 바로 기록'],
@@ -446,6 +447,7 @@ function renderLedger(){
   const listHtml = days.map(d=>{
     const items = byDate[d].map(r=>`
       <div class="led-item" onclick='openLedgerForm(${JSON.stringify(r.id)})'>
+        ${r.recurringId?'<span class="cat" style="background:#e7f6ec;color:#18a058">고정</span>':''}
         <span class="cat">${esc(r.category)}</span>
         <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}</span>
         <span class="amt ${r.kind}">${r.kind==='income'?'+':'-'}${fmt(r.amount)}원</span>
@@ -518,8 +520,9 @@ function openDayModal(ds){
   const wd = ['일','월','화','수','목','금','토'][new Date(ds).getDay()];
   const entryHtml = rows.map(r=>`
     <div class="led-item" onclick='openLedgerForm(${JSON.stringify(r.id)})'>
+      ${r.recurringId?'<span class="cat" style="background:#e7f6ec;color:#18a058">고정</span>':''}
       <span class="cat">${esc(r.category)}</span>
-      <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}${r.recurringId?' <span class="muted">· 고정</span>':''}</span>
+      <span class="mm">${esc(r.memo)||'<span style="color:#9aa3b5">메모 없음</span>'}</span>
       <span class="amt ${r.kind}">${r.kind==='income'?'+':'-'}${fmt(r.amount)}원</span>
     </div>`).join('');
   openModal(`<h2>${m}월 ${d}일 (${wd})</h2>
@@ -677,6 +680,10 @@ function openLedgerForm(id, presetDate){
   const ownerOpts = MEMBERS.filter(m=>m.active && m.isPerson!==false).map(m=>`<option value="${m.id}" ${it&&it.ownerId===m.id?'selected':''}>${esc(m.displayName)}</option>`).join('');
   openModal(`
     <h2>${it?'내역 수정':'가계부 기록'}</h2>
+    ${it&&it.recurringId?`<div style="background:#e7f6ec; color:#15803d; border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:.88rem; display:flex; align-items:center; justify-content:space-between; gap:8px">
+      <span>🔁 <b>고정지출</b> — 매달 자동 기록되는 내역입니다</span>
+      <button class="btn btn-ghost btn-sm" onclick='openRecurringForm(${JSON.stringify(it.recurringId)})'>설정 열기</button>
+    </div>`:''}
     <div class="f-row"><div class="seg" id="ledKindSeg">
       <button type="button" class="exp ${kind==='expense'?'on':''}" data-k="expense">지출</button>
       <button type="button" class="inc ${kind==='income'?'on':''}" data-k="income">수입</button>
