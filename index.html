@@ -180,8 +180,8 @@ footer button{color:#9aa3b5; text-decoration:underline}
 <!-- ============ 로그인 화면 ============ -->
 <div id="loginView">
   <div class="login-card">
-    <h1>🏠 우리집 자산</h1>
-    <p class="desc">가족만 볼 수 있는 우리집 재산 기록장</p>
+    <h1>🏠 우리집 지출관리</h1>
+    <p class="desc">가족만 볼 수 있는 우리집 가계부</p>
     <input id="liId" placeholder="아이디" autocomplete="username">
     <input id="liPw" type="password" placeholder="비밀번호" autocomplete="current-password">
     <button onclick="doLogin()">로그인</button>
@@ -194,10 +194,11 @@ footer button{color:#9aa3b5; text-decoration:underline}
 <header>
   <div class="hd-in">
     <div class="hd-top">
-      <h1>🏠 우리집 자산<span class="who" id="whoami"></span></h1>
+      <h1>🏠 우리집 지출관리<span class="who" id="whoami"></span></h1>
       <button class="gear" onclick="openSettings()">⚙️</button>
     </div>
-    <div class="tabs">
+    <!-- 지출 전용 모드: 재산현황/자산 탭 숨김 (데이터는 유지 — 다시 켜려면 display:none 제거) -->
+    <div class="tabs" style="display:none">
       <button id="tabBtn-ledger" class="on" onclick="showTab('ledger')">지출·가계부</button>
       <button id="tabBtn-home" onclick="showTab('home')">재산현황</button>
       <button id="tabBtn-assets" onclick="showTab('assets')">자산</button>
@@ -230,8 +231,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.4.0';
 const CHANGELOG = [
+  ['v1.4.0', '2026-07-20', '지출 전용 화면으로 단순화 — 재산현황·자산 탭 숨김 (데이터는 그대로, 나중에 다시 켤 수 있음)'],
   ['v1.3.0', '2026-07-20', '지출 달력 추가 — 날짜별 지출/수입과 "나갈 예정" 고정지출이 달력에 표시, 날짜 눌러서 바로 기록'],
   ['v1.2.0', '2026-07-20', '고정지출(매달 반복) 기능 — 등록해두면 매달 체크리스트로 뜸. 지출 탭을 첫 화면으로, 분류별 지출 그래프 추가'],
   ['v1.1.0', '2026-07-20', '가족 공용 아이디 1개로 로그인하도록 변경, 구성원 실제 이름 반영 (박지호·박소연·박현주·정시헌)'],
