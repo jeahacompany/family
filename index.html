@@ -201,7 +201,8 @@ footer button{color:#9aa3b5; text-decoration:underline}
     <!-- 재산현황/자산 탭은 숨김 (데이터는 유지 — 다시 켜려면 display:none 제거) -->
     <div class="tabs">
       <button id="tabBtn-ledger" class="on" onclick="showTab('ledger')">가계부</button>
-      <button id="tabBtn-cards" onclick="showTab('cards')">카드·할부</button>
+      <button id="tabBtn-insur" onclick="showTab('insur')">보험</button>
+      <button id="tabBtn-cards" onclick="showTab('cards')">카드</button>
       <button id="tabBtn-loans" onclick="showTab('loans')">대여금</button>
       <button id="tabBtn-deposits" onclick="showTab('deposits')">보증금</button>
       <button id="tabBtn-home" style="display:none" onclick="showTab('home')">재산현황</button>
@@ -215,6 +216,7 @@ footer button{color:#9aa3b5; text-decoration:underline}
   <div id="tab-cards" style="display:none"></div>
   <div id="tab-loans" style="display:none"></div>
   <div id="tab-deposits" style="display:none"></div>
+  <div id="tab-insur" style="display:none"></div>
   <div id="tab-home" style="display:none"></div>
   <div id="tab-assets" style="display:none"></div>
   <footer>
@@ -238,8 +240,9 @@ footer button{color:#9aa3b5; text-decoration:underline}
    우리집 자산 — 프론트엔드 (파일 1개, 프레임워크 없음)
    서버는 Supabase의 public.family_api() 함수 하나만 호출한다.
    ============================================================ */
-const VERSION = 'v1.9.3';
+const VERSION = 'v2.0.0';
 const CHANGELOG = [
+  ['v2.0.0', '2026-07-20', '보험 탭 신설 — 실제 납입 회차·총액(기준값 보정)과 비과세 해지일 관리. 누적 납입액이 자산으로 보임'],
   ['v1.9.3', '2026-07-20', '카드마다 용도 메모 — "생활비 전용, 주유·차량" 식으로 적어두면 카드 목록에 노란 라벨로 표시'],
   ['v1.9.2', '2026-07-20', '보증금을 기존 고정지출(렌트·월세)에 연결 — 고르면 이름·명의·돌려받는 시기 자동 입력, 양쪽에 서로 표시'],
   ['v1.9.1', '2026-07-20', '대여금 상환도 "매달 고정지출" 목록·총액에 포함 (기간 끝날 때까지 고정이니까)'],
@@ -364,11 +367,11 @@ async function reload(){
 /* ---------- 탭 ---------- */
 function showTab(t){
   curTab=t;
-  ['home','ledger','assets','cards','loans','deposits'].forEach(x=>{
+  ['home','ledger','assets','cards','loans','deposits','insur'].forEach(x=>{
     $('tab-'+x).style.display = x===t?'block':'none';
     $('tabBtn-'+x).classList.toggle('on', x===t);
   });
-  $('fabBtn').style.display = (t==='ledger'||t==='assets'||t==='cards'||t==='loans'||t==='deposits') ? 'block' : 'none';
+  $('fabBtn').style.display = (t==='ledger'||t==='assets'||t==='cards'||t==='loans'||t==='deposits'||t==='insur') ? 'block' : 'none';
   window.scrollTo(0,0);
 }
 function fabClick(){
@@ -377,8 +380,9 @@ function fabClick(){
   else if(curTab==='cards'){ CARDS.length ? openInstForm() : openCardForm(); }
   else if(curTab==='loans') openLoanForm();
   else if(curTab==='deposits') openDepositForm();
+  else if(curTab==='insur') openRecurringForm('', '보험');
 }
-function renderAll(){ renderHome(); renderLedger(); renderAssets(); renderCards(); renderLoans(); renderDeposits(); showTab(curTab); }
+function renderAll(){ renderHome(); renderLedger(); renderAssets(); renderCards(); renderLoans(); renderDeposits(); renderInsurance(); showTab(curTab); }
 
 /* ============================================================
    ① 재산현황
@@ -580,7 +584,10 @@ function recurringCard(rows){
       const p = recurPeriod(r);
       const depSum = ASSETS.filter(a=>a.category==='보증금' && !a.isDebt && a.linkedRecurringId===r.id)
         .reduce((s,a)=>s+Number(a.value),0);
-      const sub = (p
+      const e = effPaid(r);
+      const sub = (r.baseYm
+        ? `<b>${e.cnt}${r.totalMonths?'/'+r.totalMonths:''}회</b> 실납입 · 누적 ${fmtKor(e.amt)}${p&&p.endYm?` · <b style="color:var(--accent)">${p.endYm.replace('-','.')} 끝</b>`:''}`
+        : p
         ? `${p.startTxt} 시작 · <b>${p.cnt}${r.totalMonths?'/'+r.totalMonths:''}회</b> 납부 · 누적 ${fmtKor(p.paidAmt)}${p.endYm?` · <b style="color:var(--accent)">${p.endYm.replace('-','.')} 끝</b>`:''}`
         : `누적 ${r.paidCount||0}회 · ${fmtKor(r.paidTotal||0)}`)
         + (depSum?` · <b style="color:#1d6b50">보증금 ${fmtKor(depSum)}</b>`:'');
@@ -678,11 +685,12 @@ function openRecurringManage(){
       <button class="btn btn-primary" onclick="closeModal()">닫기</button>
     </div>`);
 }
-function openRecurringForm(id){
+function openRecurringForm(id, presetCat){
   const it = id ? RECURRING.find(r=>r.id===id) : null;
+  const selCat = it ? it.category : (presetCat || '');
   const ownerOpts = MEMBERS.filter(m=>m.active && m.isPerson!==false).map(m=>
     `<option value="${m.id}" ${it&&it.ownerId===m.id?'selected':''}>${esc(m.displayName)}</option>`).join('');
-  const catOpts = EXP_CATS.map(c=>`<option ${it&&it.category===c?'selected':''}>${c}</option>`).join('');
+  const catOpts = EXP_CATS.map(c=>`<option ${selCat===c?'selected':''}>${c}</option>`).join('');
   openModal(`
     <h2>${it?'고정지출 수정':'고정지출 등록'}</h2>
     <div class="f-row"><label>이름</label><input id="rcName" placeholder="예: 통신비, 자동차보험, 넷플릭스" value="${it?esc(it.name):''}"></div>
@@ -692,6 +700,13 @@ function openRecurringForm(id){
     <div class="f-row"><label>총 개월 수 (선택 — 비우면 계속 나감)</label><input id="rcTotal" type="number" min="1" max="600" value="${it&&it.totalMonths?it.totalMonths:''}"><div class="kor-hint" id="rcPeriodHint"></div></div>
     <div class="f-row"><label>분류</label><select id="rcCat">${catOpts}</select></div>
     <div class="f-row"><label>누구 (선택)</label><select id="rcOwner"><option value="">공동/무관</option>${ownerOpts}</select></div>
+    <div style="background:#f4f0fb; border-radius:12px; padding:12px; margin-bottom:12px">
+      <div style="font-size:.82rem; font-weight:700; color:#4a3a7c; margin-bottom:8px">📋 실제 납입 실적 (선택 — 보험·적금처럼 예전부터 낸 것)</div>
+      <div class="f-row"><label>기준 월 (이 달까지 낸 게 아래 값)</label><input id="rcBaseYm" type="month" value="${it&&it.baseYm?it.baseYm:''}"></div>
+      <div class="f-row"><label>그때까지 납입 회차</label><input id="rcBaseCnt" type="number" min="0" placeholder="예: 49" value="${it&&it.baseCount!=null?it.baseCount:''}"></div>
+      <div class="f-row"><label>그때까지 납입 총액</label><input id="rcBaseAmt" inputmode="numeric" placeholder="예: 50,945,300" value="${it&&it.baseAmount?fmt(it.baseAmount):''}"><div class="kor-hint" id="rcBaseAmtHint">${it&&it.baseAmount?'= '+fmtKor(it.baseAmount):''}</div></div>
+      <div class="f-row" style="margin-bottom:0"><label>비과세·해지 가능일 (선택)</label><input id="rcMaturity" type="date" value="${it&&it.maturityDate?it.maturityDate:''}"></div>
+    </div>
     <div class="f-row"><label>메모 (선택)</label><input id="rcMemo" value="${it?esc(it.memo):''}"></div>
     ${it?`<div class="f-row"><label><input type="checkbox" id="rcActive" ${it.active?'checked':''} style="width:auto;margin-right:6px">사용 중 (끄면 체크리스트에서 숨김)</label></div>`:''}
     <div class="m-actions">
@@ -699,6 +714,7 @@ function openRecurringForm(id){
       <button class="btn btn-primary" onclick="saveRecurring('${it?it.id:''}')">저장</button>
     </div>`);
   moneyInput($('rcAmt'), $('rcAmtHint'));
+  moneyInput($('rcBaseAmt'), $('rcBaseAmtHint'));
   // 기간 입력 시 "지금까지 몇 회·언제 끝" 미리보기
   const updPeriod = ()=>{
     const s = $('rcStart').value, n = Number($('rcTotal').value||0), amt = moneyVal($('rcAmt'));
@@ -717,7 +733,10 @@ async function saveRecurring(id){
       id: id||'', name: $('rcName').value.trim(), amount: moneyVal($('rcAmt')),
       dom: Number($('rcDom').value||1), category: $('rcCat').value,
       ownerId: $('rcOwner').value, memo: $('rcMemo').value.trim(),
-      startYm: $('rcStart').value || '', totalMonths: $('rcTotal').value || ''
+      startYm: $('rcStart').value || '', totalMonths: $('rcTotal').value || '',
+      baseYm: $('rcBaseYm').value || '', baseCount: $('rcBaseCnt').value || '',
+      baseAmount: moneyVal($('rcBaseAmt')) ? String(moneyVal($('rcBaseAmt'))) : '',
+      maturityDate: $('rcMaturity').value || ''
     };
     if(id) info.active = $('rcActive').checked;
     await api('recurringSave', TOKEN, info);
@@ -1362,6 +1381,69 @@ async function deleteDeposit(id){
   if(!confirm('이 보증금을 삭제할까요?')) return;
   try{ await api('assetDelete', TOKEN, id); closeModal(); toast('삭제했습니다'); await reload(); }
   catch(e){ alert(e.message); }
+}
+
+/* ============================================================
+   보험 — 분류 '보험'인 고정지출을 실납입 실적과 함께 관리
+   ============================================================ */
+/* 실제 누적 납입 (기준값 + 그 이후 앱 자동기록) — 기준값 없으면 시작월 추정 */
+function effPaid(r){
+  if(r.baseYm != null && r.baseYm !== ''){
+    return { cnt: Number(r.baseCount||0) + Number(r.paidCountAfterBase||0),
+             amt: Number(r.baseAmount||0) + Number(r.paidTotalAfterBase||0), real: true };
+  }
+  const p = recurPeriod(r);
+  if(p) return { cnt: p.cnt, amt: p.paidAmt, real: false };
+  return { cnt: Number(r.paidCount||0), amt: Number(r.paidTotal||0), real: false };
+}
+/* 해지가능일까지 남은 기간 표기 */
+function maturityTxt(d){
+  if(!d) return '';
+  const today = new Date(); const md = new Date(d+'T00:00:00');
+  const days = Math.ceil((md - today) / 86400000);
+  if(days <= 0) return `<b style="color:var(--green)">해지 비과세 가능 (${d.replace(/-/g,'.')} 지남)</b>`;
+  const y = Math.floor(days/365), m = Math.floor((days%365)/30);
+  return `<b style="color:#a16207">${d.replace(/-/g,'.')} 이후 해지 비과세</b> <span class="muted">(${y?y+'년 ':''}${m}개월 남음)</span>`;
+}
+function renderInsurance(){
+  const el = $('tab-insur'); if(!el) return;
+  const items = RECURRING.filter(r=>r.category==='보험' && r.active).sort((a,b)=>a.dom-b.dom);
+  if(!items.length){
+    el.innerHTML = `<div class="empty" style="padding-top:60px">
+      분류를 <b>'보험'</b>으로 등록한 고정지출이 자동으로 여기 모입니다.<br>
+      실제 납입 회차·총액과 비과세 해지일까지 관리됩니다.<br><br>
+      <button class="btn btn-primary" onclick="openRecurringForm('', '보험')">＋ 보험 등록</button></div>`;
+    return;
+  }
+  const totalPaid = items.reduce((s,r)=>s+effPaid(r).amt, 0);
+  const monthlySum = items.reduce((s,r)=>s+Number(r.amount), 0);
+  const rows = items.map(r=>{
+    const e = effPaid(r);
+    const p = recurPeriod(r);
+    return `<div class="rec-item" onclick='openRecurringForm(${JSON.stringify(r.id)})'>
+      <span class="nm">${esc(r.name)}${r.ownerId?` <span class="muted">· ${esc(memberName(r.ownerId))}</span>`:''}
+        <div class="rec-sub"><b>${e.cnt}회 납입 · 누적 ${fmtKor(e.amt)}</b>${e.real?'':' (추정)'}
+          ${p&&p.endYm?` · ${p.endYm.replace('-','.')} 납입 끝`:''}</div>
+        ${r.maturityDate?`<div class="rec-sub">${maturityTxt(r.maturityDate)}</div>`:''}
+      </span>
+      <span class="amt">월 ${fmt(r.amount)}원</span>
+    </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="networth" style="background:linear-gradient(135deg,#4a3a7c,#6b58a8)">
+      <div class="lbl">보험에 지금까지 부은 돈 (해지하면 자산)</div>
+      <div class="big">${fmtWon(totalPaid)}</div>
+      <div class="kor">${fmtKor(totalPaid)} · ${items.length}건</div>
+      <div class="split">
+        <div><div class="lbl">매달 나가는 보험료</div><div class="val">${fmtKor(monthlySum)}</div></div>
+        <div><div class="lbl">건수</div><div class="val">${items.length}건</div></div>
+      </div>
+    </div>
+    <div class="card"><h3>보험 목록 (누르면 수정 — 실납입·비과세일 입력)</h3>${rows}</div>
+    <div class="row" style="margin-top:16px; justify-content:center">
+      <button class="btn btn-ghost btn-sm" onclick="openRecurringForm('', '보험')">＋ 보험 추가</button>
+    </div>
+    <div class="muted" style="text-align:center; margin-top:10px">매달 보험료는 가계부에 자동 기록되고, 납입 회차·누적액이 계속 쌓입니다</div>`;
 }
 
 /* ============================================================
